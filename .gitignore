@@ -1,0 +1,11 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Environnement
+.env
+.venv/
+
+# SQLite & médias
+media/
+!media/.gitkeep
