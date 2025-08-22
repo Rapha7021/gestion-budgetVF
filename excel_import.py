@@ -118,28 +118,3 @@ def import_excel(parent, file_path=None):
         QMessageBox.critical(parent, "Erreur import Excel", str(e))
         return None
 
-def print_annees_result(df_long, parent):
-    """
-    Affiche un résumé par année dans une boîte de dialogue.
-    """
-    if df_long is None or df_long.empty:
-        QMessageBox.information(parent, "Résultat", "Aucune donnée importée.")
-        return
-    # Synthèse adaptée au format 'Année - NomColonne'
-    if df_long is None or df_long.empty:
-        QMessageBox.information(parent, "Résultat", "Aucune donnée importée.")
-        return
-    annees = getattr(df_long, '_imported_years', None)
-    if not annees:
-        # Si pas d'années détectées, essayer de les trouver dans les colonnes
-        annees = sorted(list(set([c.split(' - ')[0] for c in df_long.columns if ' - ' in c and c.split(' - ')[0].isdigit()])))
-    result = ""
-    for annee in annees:
-        nb_jours_col = f"{annee} - Nb jours"
-        cout_prod_col = f"{annee} - Montant coût de production"
-        montant_charge_col = f"{annee} - Montant chargé"
-        total_jours = df_long[nb_jours_col].sum() if nb_jours_col in df_long.columns else 0
-        total_cout = df_long[cout_prod_col].sum() if cout_prod_col in df_long.columns else 0
-        total_charge = df_long[montant_charge_col].sum() if montant_charge_col in df_long.columns else 0
-        result += f"Année {annee} : Nb jours = {total_jours}, Coût de production = {total_cout} €, Montant chargé = {total_charge} €\n"
-    QMessageBox.information(parent, "Synthèse par année", result)

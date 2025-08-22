@@ -11,6 +11,7 @@ import datetime
 import re
 import shutil
 import os
+import pandas as pd  # Ajout pour lecture Excel
 
 DB_PATH = 'gestion_budget.db'
 
@@ -145,14 +146,19 @@ class MainWindow(QWidget):
         self.project_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.project_table)
         btn_layout = QHBoxLayout()
-        self.btn_new = QPushButton('Nouveau')
-        self.btn_edit = QPushButton('Modifier')
+        self.btn_new = QPushButton('Nouveau projet')
+        self.btn_edit = QPushButton('Modifier le projet sélectionné')
         self.btn_delete = QPushButton('Supprimer')
         self.btn_themes = QPushButton('Gérer les thèmes')
+        self.btn_couts_categorie = QPushButton('Coûts par catégorie')
+        self.btn_couts_categorie.setToolTip(
+            "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
+        )
         btn_layout.addWidget(self.btn_new)
         btn_layout.addWidget(self.btn_edit)
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_themes)
+        btn_layout.addWidget(self.btn_couts_categorie, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.btn_new.clicked.connect(self.open_project_form)
@@ -160,6 +166,12 @@ class MainWindow(QWidget):
         self.btn_delete.clicked.connect(self.delete_project)
         self.btn_themes.clicked.connect(self.open_theme_manager)
         self.project_table.cellDoubleClicked.connect(self.show_project_details)
+        self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
+
+    def open_categorie_cout_dialog(self):
+        from categorie_cout_dialog import CategorieCoutDialog
+        dialog = CategorieCoutDialog(self)
+        dialog.exec()
 
     def load_projects(self):
         self.project_table.setRowCount(0)
@@ -309,7 +321,8 @@ class ProjectForm(QDialog):
             'Technicien': QSpinBox(),
             'Junior': QSpinBox(),
             'Senior': QSpinBox(),
-            'Expert': QSpinBox()
+            'Expert': QSpinBox(),
+            'Collaborateur moyen': QSpinBox()
         }
         for label, spin in self.equipe_types.items():
             spin.setRange(0, 99)
@@ -340,6 +353,26 @@ class ProjectForm(QDialog):
         # Charger les données du projet si modification
         if self.projet_id:
             self.load_project_data()
+        # Bouton Import Excel
+        self.btn_import_excel = QPushButton('Importer Excel')
+        self.btn_import_excel.setToolTip(
+            "Source Agresso\n"
+            "Requête\n"
+            "1-Gestion de projet\n"
+            "4-Requetes Edition\n"
+            "6-Liste des opérations\n"
+            "Liste des opérations actives\n"
+            "Choix de la date de début\n"
+            "Menu Editions\n"
+            "Format XLSX"
+        )
+        self.btn_import_excel.clicked.connect(self.import_excel_dialog)
+        self.layout.insertWidget(0, self.btn_import_excel)
+
+    def import_excel_dialog(self):
+        # Importer la fonction depuis le nouveau module
+        from excel_importer_projet import import_project_from_excel
+        import_project_from_excel(self)
 
     def check_form_valid(self):
         code_ok = bool(self.code_edit.text().strip())

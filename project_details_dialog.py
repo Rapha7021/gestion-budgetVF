@@ -91,14 +91,14 @@ class ProjectDetailsDialog(QDialog):
         actualites_label = QLabel("<b>Actualités du projet :</b>")
         main_layout.addWidget(actualites_label)
         self.actualites_list = QListWidget()
-        self.actualites_list.setMaximumHeight(100)  # Hauteur max fixée, ajustable selon besoin
+        self.actualites_list.setMaximumHeRZFight(100)  # Hauteur max fixée, ajustable selon besoin
         main_layout.addWidget(self.actualites_list)
 
         # Boutons actualités
         btn_hbox = QHBoxLayout()
-        add_btn = QPushButton("Ajouter")
-        edit_btn = QPushButton("Modifier")
-        del_btn = QPushButton("Supprimer")
+        add_btn = QPushButton("Ajouter une actualité")
+        edit_btn = QPushButton("Modifier l'actualité sélectionnée")
+        del_btn = QPushButton("Supprimer l'actualité sélectionnée")
         btn_hbox.addWidget(add_btn)
         btn_hbox.addWidget(edit_btn)
         btn_hbox.addWidget(del_btn)
@@ -130,8 +130,25 @@ class ProjectDetailsDialog(QDialog):
         dlg.exec()
 
     def handle_print_result(self):
-        from excel_import import print_annees_result
-        print_annees_result(self.df_long, self)
+        import sqlite3, pickle
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT data FROM imports WHERE projet_id=? ORDER BY import_date DESC LIMIT 1', (self.projet_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            try:
+                df_long = pickle.loads(row[0])
+            except Exception:
+                df_long = None
+        else:
+            df_long = None
+        if df_long is not None and hasattr(df_long, 'columns') and len(df_long.columns) > 0:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Synthèse", "La synthèse n'est plus disponible.")
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Synthèse", "Aucune donnée importée ou données invalides.")
     def load_actualites(self):
         self.actualites_list.clear()
         conn = sqlite3.connect(DB_PATH)
