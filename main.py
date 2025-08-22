@@ -48,6 +48,28 @@ def init_db():
         data BLOB,
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS investissements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        montant REAL,
+        date_achat TEXT,
+        duree INTEGER,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        type TEXT,
+        nombre INTEGER,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS actualites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        message TEXT NOT NULL,
+        date TEXT NOT NULL,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
     conn.commit()
     conn.close()
 
@@ -68,28 +90,37 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, 'Erreur', 'Projet introuvable.')
             return
         projet_id = res[0]
-        print(f"DEBUG: projet_id sélectionné = {projet_id}")
         form = ProjectForm(self, projet_id)
         if form.exec():
             self.load_projects()
 
     def delete_project(self):
-        item = self.list_widget.currentItem()
-        if not item:
+        rows = self.project_table.selectionModel().selectedRows()
+        if not rows:
             QMessageBox.warning(self, 'Supprimer', 'Sélectionnez un projet à supprimer.')
             return
-        pid = int(item.text().split(':')[0])
+        row = rows[0].row()
+        code = self.project_table.item(row, 0).text()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM projets WHERE code=?', (code,))
+        res = cursor.fetchone()
+        if not res:
+            conn.close()
+            QMessageBox.warning(self, 'Erreur', 'Projet introuvable.')
+            return
+        pid = res[0]
         confirm = QMessageBox.question(
-            self, 'Confirmation', 'Voulez-vous vraiment supprimer ce projet ?',
+            self, 'Confirmation', f'Voulez-vous vraiment supprimer le projet {code} ?',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
             cursor.execute('DELETE FROM projets WHERE id=?', (pid,))
             conn.commit()
             conn.close()
             self.load_projects()
+        else:
+            conn.close()
     def __init__(self):
         super().__init__()
         self.setWindowTitle('Gestion de Budget - Menu Principal')
@@ -128,6 +159,7 @@ class MainWindow(QWidget):
         self.btn_edit.clicked.connect(self.edit_project)
         self.btn_delete.clicked.connect(self.delete_project)
         self.btn_themes.clicked.connect(self.open_theme_manager)
+        self.project_table.cellDoubleClicked.connect(self.show_project_details)
 
     def load_projects(self):
         self.project_table.setRowCount(0)
@@ -149,6 +181,22 @@ class MainWindow(QWidget):
 
     def open_theme_manager(self):
         dialog = ThemeManager(self)
+        dialog.exec()
+
+    def show_project_details(self, row, column):
+        code = self.project_table.item(row, 0).text()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM projets WHERE code=?', (code,))
+        res = cursor.fetchone()
+        conn.close()
+        if not res:
+            QMessageBox.warning(self, 'Erreur', 'Projet introuvable.')
+            return
+        projet_id = res[0]
+        # Correction : import ici
+        from project_details_dialog import ProjectDetailsDialog
+        dialog = ProjectDetailsDialog(self, projet_id)
         dialog.exec()
 
 class ProjectForm(QDialog):
@@ -208,44 +256,8 @@ class ProjectForm(QDialog):
         theme_vbox = QVBoxLayout()
         self.theme_search = QLineEdit()
         self.theme_search.setPlaceholderText('Rechercher un thème...')
-
-        # Si projet_id fourni, charger les données du projet
-        if self.projet_id:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?', (self.projet_id,))
-            projet = cursor.fetchone()
-            if projet:
-                self.code_edit.setText(projet[0])
-                self.nom_edit.setText(projet[1])
-                self.details_edit.setPlainText(projet[2] or "")
-                # Dates
-                try:
-                    if projet[3]:
-                        d = projet[3].split('/')
-                        self.date_debut.setDate(datetime.date(int(d[1]), int(d[0]), 1))
-                    if projet[4]:
-                        d = projet[4].split('/')
-                        self.date_fin.setDate(datetime.date(int(d[1]), int(d[0]), 1))
-                except Exception:
-                    pass
-                self.livrables_edit.setText(projet[5] or "")
-                self.chef_edit.setText(projet[6] or "")
-                idx = self.etat_combo.findText(projet[7])
-                if idx >= 0:
-                    self.etat_combo.setCurrentIndex(idx)
-                self.cir_check.setChecked(bool(projet[8]))
-                self.subv_check.setChecked(bool(projet[9]))
-                # Thèmes liés
-                cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
-                self.selected_themes = [nom for (nom,) in cursor.fetchall()]
-                # Images liées
-                cursor.execute('SELECT nom FROM images WHERE projet_id=?', (self.projet_id,))
-                for (img_nom,) in cursor.fetchall():
-                    self.images_list.addItem(os.path.join('images', img_nom))
-            conn.close()
-        theme_vbox.addWidget(self.theme_search)
         self.theme_listwidget = QListWidget()
+        theme_vbox.addWidget(self.theme_search)
         theme_vbox.addWidget(self.theme_listwidget)
         self.tag_area = QScrollArea()
         self.tag_area.setWidgetResizable(True)
@@ -271,6 +283,9 @@ class ProjectForm(QDialog):
         img_vbox.addWidget(self.images_list)
         img_group.setLayout(img_vbox)
         grid.addWidget(img_group, row, 2, 2, 2)
+        # Ajout du menu contextuel pour suppression d'image
+        self.images_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.images_list.customContextMenuRequested.connect(self.image_context_menu)
         row += 2
         # Investissements (groupe à part)
         invest_group = QGroupBox('Investissements')
@@ -322,6 +337,9 @@ class ProjectForm(QDialog):
         self.chef_edit.textChanged.connect(self.check_form_valid)
         self.theme_listwidget.itemSelectionChanged.connect(self.check_form_valid)
         self.check_form_valid()
+        # Charger les données du projet si modification
+        if self.projet_id:
+            self.load_project_data()
 
     def check_form_valid(self):
         code_ok = bool(self.code_edit.text().strip())
@@ -467,6 +485,23 @@ class ProjectForm(QDialog):
                 with open(img_path, 'rb') as f:
                     data = f.read()
                 cursor.execute('INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)', (projet_id, os.path.basename(img_path), data))
+            # Met à jour les investissements
+            cursor.execute('DELETE FROM investissements WHERE projet_id=?', (projet_id,))
+            for i in range(self.invest_list.count()):
+                txt = self.invest_list.item(i).text()
+                try:
+                    montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    cursor.execute('INSERT INTO investissements (projet_id, montant, date_achat, duree) VALUES (?, ?, ?, ?)', (projet_id, montant, date_achat, duree))
+                except Exception:
+                    pass
+            # Met à jour l'équipe
+            cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
+            for label, spin in self.equipe_types.items():
+                nombre = spin.value()
+                if nombre > 0:
+                    cursor.execute('INSERT INTO equipe (projet_id, type, nombre) VALUES (?, ?, ?)', (projet_id, label, nombre))
         else:
             # Création d'un nouveau projet
             cursor.execute('''INSERT INTO projets (code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention)
@@ -496,6 +531,21 @@ class ProjectForm(QDialog):
                 with open(img_path, 'rb') as f:
                     data = f.read()
                 cursor.execute('INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)', (projet_id, os.path.basename(img_path), data))
+            # Enregistre les investissements
+            for i in range(self.invest_list.count()):
+                txt = self.invest_list.item(i).text()
+                try:
+                    montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    cursor.execute('INSERT INTO investissements (projet_id, montant, date_achat, duree) VALUES (?, ?, ?, ?)', (projet_id, montant, date_achat, duree))
+                except Exception:
+                    pass
+            # Enregistre l'équipe
+            for label, spin in self.equipe_types.items():
+                nombre = spin.value()
+                if nombre > 0:
+                    cursor.execute('INSERT INTO equipe (projet_id, type, nombre) VALUES (?, ?, ?)', (projet_id, label, nombre))
         conn.commit()
         conn.close()
         self.accept()
@@ -538,6 +588,87 @@ class ProjectForm(QDialog):
         for (img_name,) in cursor.fetchall():
             self.images_list.addItem(os.path.join('images', img_name))
         conn.close()
+        # Si projet_id fourni, charger les données du projet
+        if self.projet_id:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?', (self.projet_id,))
+            projet = cursor.fetchone()
+            if projet:
+                self.code_edit.setText(projet[0] or "")
+                self.nom_edit.setText(projet[1] or "")
+                self.details_edit.setPlainText(projet[2] or "")
+                # Dates
+                try:
+                    if projet[3]:
+                        d = projet[3].split('/')
+                        self.date_debut.setDate(datetime.date(int(d[1]), int(d[0]), 1))
+                    if projet[4]:
+                        d = projet[4].split('/')
+                        self.date_fin.setDate(datetime.date(int(d[1]), int(d[0]), 1))
+                except Exception:
+                    pass
+                self.livrables_edit.setText(projet[5] or "")
+                self.chef_edit.setText(projet[6] or "")
+                idx = self.etat_combo.findText(projet[7])
+                if idx >= 0:
+                    self.etat_combo.setCurrentIndex(idx)
+                self.cir_check.setChecked(bool(projet[8]))
+                self.subv_check.setChecked(bool(projet[9]))
+                # Thèmes liés
+                cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
+                self.selected_themes = [nom for (nom,) in cursor.fetchall()]
+                self.update_theme_tags()
+                # Images liées
+                self.images_list.clear()
+                cursor.execute('SELECT nom FROM images WHERE projet_id=?', (self.projet_id,))
+                for (img_nom,) in cursor.fetchall():
+                    self.images_list.addItem(os.path.join('images', img_nom))
+                # Investissements liés
+                self.invest_list.clear()
+                cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
+                for montant, date_achat, duree in cursor.fetchall():
+                    invest_str = f"Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
+                    self.invest_list.addItem(invest_str)
+                # Equipe liée
+                cursor.execute('SELECT type, nombre FROM equipe WHERE projet_id=?', (self.projet_id,))
+                equipe_data = {type_: nombre for type_, nombre in cursor.fetchall()}
+                for label, spin in self.equipe_types.items():
+                    spin.setValue(equipe_data.get(label, 0))
+            conn.close()
+
+    def image_context_menu(self, pos):
+        item = self.images_list.itemAt(pos)
+        if item:
+            menu = QMenu()
+            delete_action = menu.addAction('Supprimer')
+            action = menu.exec(self.images_list.mapToGlobal(pos))
+            if action == delete_action:
+                confirm = QMessageBox.question(
+                    self,
+                    'Confirmation',
+                    f'Voulez-vous vraiment supprimer cette image ?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    # Vérifie si l'image est utilisée dans d'autres projets avant suppression du fichier
+                    img_rel_path = item.text()
+                    img_name = os.path.basename(img_rel_path)
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT COUNT(*) FROM images WHERE nom=?', (img_name,))
+                    count = cursor.fetchone()[0]
+                    conn.close()
+                    # Si cette image n'est plus utilisée (après suppression de la ligne courante)
+                    if count <= 1:
+                        img_path = os.path.join(os.path.dirname(__file__), img_rel_path)
+                        try:
+                            if os.path.isfile(img_path):
+                                os.remove(img_path)
+                        except Exception:
+                            pass  # Suppression silencieuse
+                    self.images_list.takeItem(self.images_list.row(item))
+        # Si clic droit sur une zone vide, rien ne se passe
 
 class InvestDialog(QDialog):
     def __init__(self, parent=None, montant='', date_achat='', duree=''):
@@ -656,10 +787,11 @@ class ThemeManager(QDialog):
             try:
                 cursor.execute('UPDATE themes SET nom=? WHERE nom=?', (new_theme, old_theme))
                 conn.commit()
-            except sqlite3.IntegrityConstraintViolation:
+            except sqlite3.IntegrityError:  # Correction ici
                 QMessageBox.warning(self, 'Erreur', 'Ce thème existe déjà.')
             conn.close()
             self.load_themes()
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
