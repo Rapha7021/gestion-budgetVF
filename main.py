@@ -71,6 +71,10 @@ def init_db():
         date TEXT NOT NULL,
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS directions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nom TEXT UNIQUE NOT NULL
+    )''')
     conn.commit()
     conn.close()
 
@@ -151,6 +155,7 @@ class MainWindow(QWidget):
         self.btn_delete = QPushButton('Supprimer')
         self.btn_themes = QPushButton('Gérer les thèmes')
         self.btn_couts_categorie = QPushButton('Coûts par catégorie')
+        self.btn_directions = QPushButton('Gérer les directions')
         self.btn_couts_categorie.setToolTip(
             "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
         )
@@ -159,6 +164,7 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_themes)
         btn_layout.addWidget(self.btn_couts_categorie, alignment=Qt.AlignmentFlag.AlignRight)
+        btn_layout.addWidget(self.btn_directions)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.btn_new.clicked.connect(self.open_project_form)
@@ -167,6 +173,7 @@ class MainWindow(QWidget):
         self.btn_themes.clicked.connect(self.open_theme_manager)
         self.project_table.cellDoubleClicked.connect(self.show_project_details)
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
+        self.btn_directions.clicked.connect(self.open_direction_manager)
 
     def open_categorie_cout_dialog(self):
         from categorie_cout_dialog import CategorieCoutDialog
@@ -193,6 +200,10 @@ class MainWindow(QWidget):
 
     def open_theme_manager(self):
         dialog = ThemeManager(self)
+        dialog.exec()
+
+    def open_direction_manager(self):
+        dialog = DirectionManager(self)
         dialog.exec()
 
     def show_project_details(self, row, column):
@@ -824,6 +835,69 @@ class ThemeManager(QDialog):
                 QMessageBox.warning(self, 'Erreur', 'Ce thème existe déjà.')
             conn.close()
             self.load_themes()
+
+class DirectionManager(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Gestion des directions')
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout()
+        self.direction_list = QListWidget()
+        layout.addWidget(self.direction_list)
+        btns = QHBoxLayout()
+        self.direction_input = QLineEdit()
+        btn_add = QPushButton('Ajouter')
+        btn_del = QPushButton('Supprimer')
+        btns.addWidget(self.direction_input)
+        btns.addWidget(btn_add)
+        btns.addWidget(btn_del)
+        layout.addLayout(btns)
+        self.setLayout(layout)
+        btn_add.clicked.connect(self.add_direction)
+        btn_del.clicked.connect(self.delete_direction)
+        self.load_directions()
+
+    def load_directions(self):
+        self.direction_list.clear()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT nom FROM directions ORDER BY nom')
+        for (nom,) in cursor.fetchall():
+            self.direction_list.addItem(nom)
+        conn.close()
+
+    def add_direction(self):
+        nom = self.direction_input.text().strip()
+        if not nom:
+            return
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute('INSERT INTO directions (nom) VALUES (?)', (nom,))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, 'Erreur', 'Cette direction existe déjà.')
+        conn.close()
+        self.direction_input.clear()
+        self.load_directions()
+
+    def delete_direction(self):
+        item = self.direction_list.currentItem()
+        if not item:
+            return
+        confirm = QMessageBox.question(
+            self,
+            'Confirmation',
+            f'Voulez-vous vraiment supprimer la direction "{item.text()}" ?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM directions WHERE nom=?', (item.text(),))
+            conn.commit()
+            conn.close()
+            self.load_directions()
 
 
 if __name__ == '__main__':

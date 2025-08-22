@@ -91,7 +91,7 @@ class ProjectDetailsDialog(QDialog):
         actualites_label = QLabel("<b>Actualités du projet :</b>")
         main_layout.addWidget(actualites_label)
         self.actualites_list = QListWidget()
-        self.actualites_list.setMaximumHeRZFight(100)  # Hauteur max fixée, ajustable selon besoin
+        self.actualites_list.setMaximumHeight(100)  # Hauteur max fixée, ajustable selon besoin
         main_layout.addWidget(self.actualites_list)
 
         # Boutons actualités
@@ -107,6 +107,9 @@ class ProjectDetailsDialog(QDialog):
         print_result_btn = QPushButton("Imprimer résultat")
         btn_hbox.addWidget(import_excel_btn)
         btn_hbox.addWidget(print_result_btn)
+        # Nouveau bouton "Modifier le budget"
+        edit_budget_btn = QPushButton("Modifier le budget")
+        btn_hbox.addWidget(edit_budget_btn)
         main_layout.addLayout(btn_hbox)
 
         self.projet_id = projet_id
@@ -119,6 +122,8 @@ class ProjectDetailsDialog(QDialog):
         self.df_long = None
         import_excel_btn.clicked.connect(self.handle_import_excel)
         print_result_btn.clicked.connect(self.handle_print_result)
+        # Connexion du bouton "Modifier le budget"
+        edit_budget_btn.clicked.connect(self.edit_budget)
 
         # Espace vide en dessous
         main_layout.addStretch()
@@ -230,3 +235,9 @@ class ProjectDetailsDialog(QDialog):
             conn.commit()
             conn.close()
             self.load_actualites()
+
+    def edit_budget(self):
+        from budget_edit_dialog import BudgetEditDialog
+        dlg = BudgetEditDialog(self.projet_id, self)
+        dlg.exec()
+    
