@@ -62,6 +62,7 @@ def init_db():
         projet_id INTEGER,
         type TEXT,
         nombre INTEGER,
+        direction TEXT,
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS actualites (
@@ -323,26 +324,55 @@ class ProjectForm(QDialog):
         invest_vbox.addWidget(self.invest_list)
         invest_group.setLayout(invest_vbox)
         grid.addWidget(invest_group, row, 0, 2, 2)
-        # Equipe (groupe à part)
-        equipe_group = QGroupBox('Equipe')
-        equipe_layout = QFormLayout()
-        self.equipe_types = {
-            'Stagiaire Projet': QSpinBox(),
-            'Assistante / opérateur': QSpinBox(),
-            'Technicien': QSpinBox(),
-            'Junior': QSpinBox(),
-            'Senior': QSpinBox(),
-            'Expert': QSpinBox(),
-            'Collaborateur moyen': QSpinBox()
-        }
-        for label, spin in self.equipe_types.items():
+        # Equipe (groupe à part) - nouvelle version
+        equipe_group = QGroupBox('Équipe par direction')
+        equipe_vbox = QVBoxLayout()
+        self.direction_combo = QComboBox()
+        self.directions = []
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT nom FROM directions ORDER BY nom')
+        self.directions = [nom for (nom,) in cursor.fetchall()]
+        conn.close()
+        self.direction_combo.addItems(self.directions)
+        equipe_vbox.addWidget(QLabel('Direction :'))
+        equipe_vbox.addWidget(self.direction_combo)
+        self.equipe_types_labels = [
+            'Stagiaire Projet',
+            'Assistante / opérateur',
+            'Technicien',
+            'Junior',
+            'Senior',
+            'Expert',
+            'Collaborateur moyen'
+        ]
+        self.equipe_spins = {}
+        equipe_form = QFormLayout()
+        for label in self.equipe_types_labels:
+            spin = QSpinBox()
             spin.setRange(0, 99)
-            equipe_layout.addRow(label, spin)
-        equipe_group.setLayout(equipe_layout)
+            self.equipe_spins[label] = spin
+            equipe_form.addRow(label, spin)
+        equipe_vbox.addLayout(equipe_form)
+        equipe_group.setLayout(equipe_vbox)
         grid.addWidget(equipe_group, row, 2, 2, 2)
         row += 2
-        self.layout.addLayout(grid)
-        # Boutons valider/annuler
+            # --- Ajout : gestion des effectifs par direction ---
+        self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
+        self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
+        
+        # Connexion des spins avec une fonction spécifique pour chaque label
+        def make_callback(label_name):
+            return lambda value: self.on_equipe_spin_changed(label_name, value)
+            
+        for label, spin in self.equipe_spins.items():
+            callback = make_callback(label)
+            spin.valueChanged.connect(callback)
+            
+        self._current_direction = self.direction_combo.currentText()  # <-- Ajout ici
+        # Pas besoin d'appeler on_direction_changed explicitement ici
+        self.layout.insertLayout(0, grid)
+         # Boutons valider/annuler
         btns = QHBoxLayout()
         self.btn_ok = QPushButton('Valider')
         self.btn_cancel = QPushButton('Annuler')
@@ -379,6 +409,28 @@ class ProjectForm(QDialog):
         )
         self.btn_import_excel.clicked.connect(self.import_excel_dialog)
         self.layout.insertWidget(0, self.btn_import_excel)
+        
+    def on_direction_changed(self, direction):
+        # Sauvegarde les valeurs courantes dans la direction précédente
+        if hasattr(self, '_current_direction') and self._current_direction is not None:
+            # Sauvegarde directement toutes les valeurs actuelles
+            for label in self.equipe_types_labels:
+                self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+                
+        # Charge les valeurs pour la direction sélectionnée
+        for label in self.equipe_types_labels:
+            # Bloquer temporairement les signaux pour éviter des appels récursifs
+            self.equipe_spins[label].blockSignals(True)
+            self.equipe_spins[label].setValue(self.equipe_data[direction][label])
+            self.equipe_spins[label].blockSignals(False)
+            
+        self._current_direction = direction
+
+    def on_equipe_spin_changed(self, label, value):
+        # Met à jour le dictionnaire pour la direction courante et le label modifié
+        if hasattr(self, '_current_direction') and self._current_direction is not None:
+            # Débogage pour vérifier les valeurs
+            self.equipe_data[self._current_direction][label] = value
 
     def import_excel_dialog(self):
         # Importer la fonction depuis le nouveau module
@@ -542,10 +594,14 @@ class ProjectForm(QDialog):
                     pass
             # Met à jour l'équipe
             cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
-            for label, spin in self.equipe_types.items():
-                nombre = spin.value()
-                if nombre > 0:
-                    cursor.execute('INSERT INTO equipe (projet_id, type, nombre) VALUES (?, ?, ?)', (projet_id, label, nombre))
+            # Sauvegarde la dernière direction affichée dans le dictionnaire
+            if hasattr(self, '_current_direction') and self._current_direction is not None:
+                for label in self.equipe_types_labels:
+                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+            for direction, types_dict in self.equipe_data.items():
+                for label, nombre in types_dict.items():
+                    if nombre > 0:
+                        cursor.execute('INSERT INTO equipe (projet_id, type, nombre, direction) VALUES (?, ?, ?, ?)', (projet_id, label, nombre, direction))
         else:
             # Création d'un nouveau projet
             cursor.execute('''INSERT INTO projets (code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention)
@@ -586,10 +642,14 @@ class ProjectForm(QDialog):
                 except Exception:
                     pass
             # Enregistre l'équipe
-            for label, spin in self.equipe_types.items():
-                nombre = spin.value()
-                if nombre > 0:
-                    cursor.execute('INSERT INTO equipe (projet_id, type, nombre) VALUES (?, ?, ?)', (projet_id, label, nombre))
+            # Sauvegarde la dernière direction affichée dans le dictionnaire
+            if hasattr(self, '_current_direction') and self._current_direction is not None:
+                for label in self.equipe_types_labels:
+                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+            for direction, types_dict in self.equipe_data.items():
+                for label, nombre in types_dict.items():
+                    if nombre > 0:
+                        cursor.execute('INSERT INTO equipe (projet_id, type, nombre, direction) VALUES (?, ?, ?, ?)', (projet_id, label, nombre, direction))
         conn.commit()
         conn.close()
         self.accept()
@@ -597,6 +657,8 @@ class ProjectForm(QDialog):
     def load_project_data(self):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        
+        # Chargement des données de base du projet
         cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?', (self.projet_id,))
         res = cursor.fetchone()
         if res:
@@ -622,64 +684,60 @@ class ProjectForm(QDialog):
                 self.etat_combo.setCurrentIndex(idx)
             self.cir_check.setChecked(bool(res[8]))
             self.subv_check.setChecked(bool(res[9]))
+            
         # Thèmes liés
         cursor.execute('SELECT t.nom FROM projet_themes pt JOIN themes t ON pt.theme_id = t.id WHERE pt.projet_id=?', (self.projet_id,))
         self.selected_themes = [nom for (nom,) in cursor.fetchall()]
         self.update_theme_tags()
+        
         # Images liées
         cursor.execute('SELECT nom FROM images WHERE projet_id=?', (self.projet_id,))
         self.images_list.clear()
         for (img_name,) in cursor.fetchall():
             self.images_list.addItem(os.path.join('images', img_name))
+            
+        # Investissements liés
+        self.invest_list.clear()
+        cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
+        for montant, date_achat, duree in cursor.fetchall():
+            invest_str = f"Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
+            self.invest_list.addItem(invest_str)
+            
+        # Initialiser self.equipe_data avec des valeurs par défaut pour toutes les directions
+        self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
+        
+        # Équipe liée - Charger toutes les données d'équipe de la base de données
+        cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (self.projet_id,))
+        for direction, type_, nombre in cursor.fetchall():
+            if direction in self.equipe_data and type_ in self.equipe_data[direction]:
+                self.equipe_data[direction][type_] = nombre
+            
+        
+        # Désactiver temporairement le signal currentTextChanged pour éviter un appel automatique à on_direction_changed
+        self.direction_combo.blockSignals(True)
+        
+        # Parcourir chaque direction pour mettre à jour les spinbox
+        for direction in self.directions:
+            # Sélectionner cette direction temporairement
+            self.direction_combo.setCurrentText(direction)
+        
+            
+            # Mettre à jour les spinbox pour cette direction
+            for label in self.equipe_types_labels:
+                # Bloquer temporairement les signaux pour éviter des appels récursifs
+                self.equipe_spins[label].blockSignals(True)
+                self.equipe_spins[label].setValue(self.equipe_data[direction][label])
+                self.equipe_spins[label].blockSignals(False)
+        
+        # Restaurer la direction initiale (celle qui était sélectionnée avant)
+        current_direction = self.direction_combo.currentText()
+        self._current_direction = current_direction
+        
+        # Réactiver le signal
+        self.direction_combo.blockSignals(False)
+    
+        
         conn.close()
-        # Si projet_id fourni, charger les données du projet
-        if self.projet_id:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?', (self.projet_id,))
-            projet = cursor.fetchone()
-            if projet:
-                self.code_edit.setText(projet[0] or "")
-                self.nom_edit.setText(projet[1] or "")
-                self.details_edit.setPlainText(projet[2] or "")
-                # Dates
-                try:
-                    if projet[3]:
-                        d = projet[3].split('/')
-                        self.date_debut.setDate(datetime.date(int(d[1]), int(d[0]), 1))
-                    if projet[4]:
-                        d = projet[4].split('/')
-                        self.date_fin.setDate(datetime.date(int(d[1]), int(d[0]), 1))
-                except Exception:
-                    pass
-                self.livrables_edit.setText(projet[5] or "")
-                self.chef_edit.setText(projet[6] or "")
-                idx = self.etat_combo.findText(projet[7])
-                if idx >= 0:
-                    self.etat_combo.setCurrentIndex(idx)
-                self.cir_check.setChecked(bool(projet[8]))
-                self.subv_check.setChecked(bool(projet[9]))
-                # Thèmes liés
-                cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
-                self.selected_themes = [nom for (nom,) in cursor.fetchall()]
-                self.update_theme_tags()
-                # Images liées
-                self.images_list.clear()
-                cursor.execute('SELECT nom FROM images WHERE projet_id=?', (self.projet_id,))
-                for (img_nom,) in cursor.fetchall():
-                    self.images_list.addItem(os.path.join('images', img_nom))
-                # Investissements liés
-                self.invest_list.clear()
-                cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
-                for montant, date_achat, duree in cursor.fetchall():
-                    invest_str = f"Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
-                    self.invest_list.addItem(invest_str)
-                # Equipe liée
-                cursor.execute('SELECT type, nombre FROM equipe WHERE projet_id=?', (self.projet_id,))
-                equipe_data = {type_: nombre for type_, nombre in cursor.fetchall()}
-                for label, spin in self.equipe_types.items():
-                    spin.setValue(equipe_data.get(label, 0))
-            conn.close()
 
     def image_context_menu(self, pos):
         item = self.images_list.itemAt(pos)

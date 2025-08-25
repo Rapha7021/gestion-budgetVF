@@ -24,7 +24,7 @@ class ProjectDetailsDialog(QDialog):
         cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (projet_id,))
         investissements = cursor.fetchall()
         # Equipe
-        cursor.execute('SELECT type, nombre FROM equipe WHERE projet_id=?', (projet_id,))
+        cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (projet_id,))
         equipe = cursor.fetchall()
         # Images
         cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (projet_id,))
@@ -64,8 +64,23 @@ class ProjectDetailsDialog(QDialog):
         # Equipe
         equipe_text = "<b>Equipe :</b>\n"
         if equipe:
-            for type_, nombre in equipe:
-                equipe_text += f"- {type_}: {nombre}\n"
+            # Organiser les données d'équipe par direction
+            equipe_par_direction = {}
+            for direction, type_, nombre in equipe:
+                if nombre > 0:  # Ne considérer que les membres avec un nombre > 0
+                    if direction not in equipe_par_direction:
+                        equipe_par_direction[direction] = []
+                    equipe_par_direction[direction].append((type_, nombre))
+            
+            # Afficher les équipes par direction
+            if equipe_par_direction:
+                for direction, membres in equipe_par_direction.items():
+                    if membres:  # Ne pas afficher les directions sans membres
+                        equipe_text += f"<b>{direction}</b>:\n"
+                        for type_, nombre in membres:
+                            equipe_text += f"  - {type_}: {nombre}\n"
+            else:
+                equipe_text += "Aucune info"
         else:
             equipe_text += "Aucune info"
         center_vbox.addWidget(QLabel(equipe_text))
