@@ -150,25 +150,8 @@ class ProjectDetailsDialog(QDialog):
         dlg.exec()
 
     def handle_print_result(self):
-        import sqlite3, pickle
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT data FROM imports WHERE projet_id=? ORDER BY import_date DESC LIMIT 1', (self.projet_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if row:
-            try:
-                df_long = pickle.loads(row[0])
-            except Exception:
-                df_long = None
-        else:
-            df_long = None
-        if df_long is not None and hasattr(df_long, 'columns') and len(df_long.columns) > 0:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Synthèse", "La synthèse n'est plus disponible.")
-        else:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Synthèse", "Aucune donnée importée ou données invalides.")
+        from print_result_action import print_result_action
+        print_result_action(self, self.projet_id)
     def load_actualites(self):
         self.actualites_list.clear()
         conn = sqlite3.connect(DB_PATH)

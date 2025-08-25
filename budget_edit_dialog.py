@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem,
     QComboBox, QHBoxLayout, QStackedWidget, QWidget, QMessageBox
 )
+from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtCore import Qt
 import sqlite3
 import re
@@ -17,11 +18,10 @@ class BudgetEditDialog(QDialog):
             CREATE TABLE IF NOT EXISTS recettes (
                 projet_id INTEGER,
                 annee INTEGER,
-                categorie TEXT,
                 mois TEXT,
                 montant REAL,
                 detail TEXT,
-                PRIMARY KEY (projet_id, annee, categorie, mois)
+                PRIMARY KEY (projet_id, annee, mois)
             )
         """)
         conn.commit()
@@ -33,11 +33,10 @@ class BudgetEditDialog(QDialog):
             CREATE TABLE IF NOT EXISTS depenses (
                 projet_id INTEGER,
                 annee INTEGER,
-                categorie TEXT,
                 mois TEXT,
                 montant REAL,
                 detail TEXT,
-                PRIMARY KEY (projet_id, annee, categorie, mois)
+                PRIMARY KEY (projet_id, annee, mois)
             )
         """)
         conn.commit()
@@ -130,9 +129,23 @@ class BudgetEditDialog(QDialog):
         self.btn_temps = QPushButton("Temps de travail")
         self.btn_recettes = QPushButton("Recettes")
         self.btn_depenses = QPushButton("Dépenses")
+        self.btns = [self.btn_temps, self.btn_recettes, self.btn_depenses]
         btn_layout.addWidget(self.btn_temps)
         btn_layout.addWidget(self.btn_recettes)
         btn_layout.addWidget(self.btn_depenses)
+
+        # Ajout du surlignage et des connexions dans le constructeur
+        def update_button_styles(active_idx):
+            for i, btn in enumerate(self.btns):
+                if i == active_idx:
+                    btn.setStyleSheet("background-color: #87CEFA; font-weight: bold;")
+                else:
+                    btn.setStyleSheet("")
+        self.update_button_styles = update_button_styles
+        self.btn_temps.clicked.connect(lambda: (self.stacked.setCurrentIndex(0), self.update_button_styles(0)))
+        self.btn_recettes.clicked.connect(lambda: (self.stacked.setCurrentIndex(1), self.update_button_styles(1)))
+        self.btn_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(2), self.update_button_styles(2)))
+        self.update_button_styles(0)
 
         # --- Regroupe année + boutons ---
         top_layout = QHBoxLayout()
@@ -230,6 +243,8 @@ class BudgetEditDialog(QDialog):
             table.setColumnWidth(0, 200)
             row_idx = 0
             self.direction_rows = set()
+            double_validator = QDoubleValidator(0.0, 9999999.99, 2)
+            double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             for direction, membres in directions.items():
                 item_dir = QTableWidgetItem(direction)
                 item_dir.setFlags(item_dir.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -252,6 +267,19 @@ class BudgetEditDialog(QDialog):
                         item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
                         table.setItem(row_idx, col, item_mois)
                     row_idx += 1
+            # Ajout du contrôle de saisie sur les cellules jours
+            def on_item_changed(item):
+                if item.row() in self.direction_rows:
+                    return
+                col = item.column()
+                if col > 0:
+                    value = item.text()
+                    state = double_validator.validate(value, 0)[0]
+                    if state != QDoubleValidator.State.Acceptable and value != "":
+                        item.setText("")
+                        return
+                self.modified = True
+            table.itemChanged.connect(on_item_changed)
 
             # Restaure les valeurs de l'année si elles existent
             self.restore_table_from_memory(year, table, colonnes, directions)
@@ -372,8 +400,17 @@ class BudgetEditDialog(QDialog):
             # Charge systématiquement les données depuis la base et restaure le tableau
             self.load_recettes_data_from_db_for_year(year, table, colonnes, self.recettes_categories)
 
-            # Détection de modification
+            # Ajout du contrôle de saisie sur les cellules Montant
+            double_validator = QDoubleValidator(0.0, 9999999.99, 2)
+            double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
+                col = item.column()
+                if "Montant" in colonnes[col]:
+                    value = item.text()
+                    state = double_validator.validate(value, 0)[0]
+                    if state != QDoubleValidator.State.Acceptable and value != "":
+                        item.setText("")
+                        return
                 self.recettes_modified = True
             table.itemChanged.connect(on_item_changed)
 
@@ -571,7 +608,17 @@ class BudgetEditDialog(QDialog):
             # Charge systématiquement les données depuis la base et restaure le tableau
             self.load_depenses_data_from_db_for_year(year, table, colonnes, self.depenses_categories)
 
+            # Ajout du contrôle de saisie sur les cellules Montant
+            double_validator = QDoubleValidator(0.0, 9999999.99, 2)
+            double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
+                col = item.column()
+                if "Montant" in colonnes[col]:
+                    value = item.text()
+                    state = double_validator.validate(value, 0)[0]
+                    if state != QDoubleValidator.State.Acceptable and value != "":
+                        item.setText("")
+                        return
                 self.depenses_modified = True
             table.itemChanged.connect(on_item_changed)
 
@@ -672,9 +719,11 @@ class BudgetEditDialog(QDialog):
         self.stacked.addWidget(depenses_widget)
 
         # --- Connexion des boutons ---
-        self.btn_temps.clicked.connect(lambda: self.stacked.setCurrentIndex(0))
-        self.btn_recettes.clicked.connect(lambda: self.stacked.setCurrentIndex(1))
-        self.btn_depenses.clicked.connect(lambda: self.stacked.setCurrentIndex(2))
+        self.btn_temps.clicked.connect(lambda: (self.stacked.setCurrentIndex(0), self.update_button_styles(0)))
+        self.btn_recettes.clicked.connect(lambda: (self.stacked.setCurrentIndex(1), self.update_button_styles(1)))
+        self.btn_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(2), self.update_button_styles(2)))
+    # Surligne le bouton actif au démarrage
+        self.update_button_styles(0)
 
         self.setLayout(main_layout)
 
