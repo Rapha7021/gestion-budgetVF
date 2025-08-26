@@ -59,12 +59,6 @@ def init_db():
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
     
-    # Migration : Ajouter la colonne nom si elle n'existe pas
-    try:
-        cursor.execute("ALTER TABLE investissements ADD COLUMN nom TEXT")
-    except sqlite3.OperationalError:
-        # La colonne existe déjà, on continue
-        pass
     cursor.execute('''CREATE TABLE IF NOT EXISTS subventions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
@@ -604,6 +598,8 @@ class ProjectForm(QDialog):
     def add_subvention(self):
         from subvention_dialog import SubventionDialog
         dialog = SubventionDialog(self)
+        # Passer l'ID du projet au dialogue
+        dialog.projet_id = self.projet_id
         if dialog.exec():
             data = dialog.get_data()
             self.subventions_data.append(data)
@@ -612,7 +608,7 @@ class ProjectForm(QDialog):
             if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
             if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
             if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
-            subv_str = f"{', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
             self.subv_list.addItem(subv_str)
 
     def subv_context_menu(self, pos):
@@ -644,6 +640,8 @@ class ProjectForm(QDialog):
         from subvention_dialog import SubventionDialog
         existing_data = self.subventions_data[row]
         dialog = SubventionDialog(self, existing_data)
+        # Passer l'ID du projet au dialogue
+        dialog.projet_id = self.projet_id
         if dialog.exec():
             data = dialog.get_data()
             self.subventions_data[row] = data
@@ -652,7 +650,7 @@ class ProjectForm(QDialog):
             if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
             if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
             if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
-            subv_str = f"{', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
             item.setText(subv_str)
 
     def save_project(self):
