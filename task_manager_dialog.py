@@ -1,0 +1,230 @@
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QInputDialog, QDateEdit, QTextEdit, QDialogButtonBox, QLabel, QLineEdit, QDoubleSpinBox
+from PyQt6.QtCore import QDate
+import sqlite3
+DB_PATH = 'gestion_budget.db'
+
+class TaskManagerDialog(QDialog):
+    def __init__(self, parent, projet_id):
+        super().__init__(parent)
+        self.setWindowTitle('Gestion des tâches du projet')
+        self.projet_id = projet_id
+        self.resize(900, 500)
+        layout = QVBoxLayout()
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels([
+            "Nom de la tâche", "Date de début", "Date de fin", "Détails", "% du budget"])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)  # Tableau non éditable
+        layout.addWidget(self.table)
+        btn_hbox = QHBoxLayout()
+        add_btn = QPushButton('Ajouter une tâche')
+        edit_btn = QPushButton('Modifier')
+        del_btn = QPushButton('Supprimer')
+        btn_hbox.addWidget(add_btn)
+        btn_hbox.addWidget(edit_btn)
+        btn_hbox.addWidget(del_btn)
+        layout.addLayout(btn_hbox)
+        self.setLayout(layout)
+        self.load_tasks()
+        add_btn.clicked.connect(self.add_task)
+        edit_btn.clicked.connect(self.edit_task)
+        del_btn.clicked.connect(self.delete_task)
+
+    def load_tasks(self):
+        self.table.setRowCount(0)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            projet_id INTEGER,
+            nom TEXT,
+            date_debut TEXT,
+            date_fin TEXT,
+            details TEXT,
+            pourcentage_budget REAL
+        )''')
+        cursor.execute('SELECT id, nom, date_debut, date_fin, details, pourcentage_budget FROM taches WHERE projet_id=?', (self.projet_id,))
+        self.task_ids = []
+        for row_idx, (id_, nom, date_debut, date_fin, details, pourcentage_budget) in enumerate(cursor.fetchall()):
+            self.table.insertRow(row_idx)
+            self.table.setItem(row_idx, 0, QTableWidgetItem(nom))
+            self.table.setItem(row_idx, 1, QTableWidgetItem(date_debut if date_debut else ""))
+            self.table.setItem(row_idx, 2, QTableWidgetItem(date_fin if date_fin else ""))
+            self.table.setItem(row_idx, 3, QTableWidgetItem(details if details else ""))
+            self.table.setItem(row_idx, 4, QTableWidgetItem(str(pourcentage_budget) if pourcentage_budget is not None else ""))
+            self.task_ids.append(id_)
+        conn.close()
+
+    def add_task(self):
+        dialog = AddTaskDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            data = dialog.get_data()
+            nom = data["nom"]
+            date_debut = parse_date_fr(data["date_debut"])
+            date_fin = parse_date_fr(data["date_fin"])
+            details = data["details"]
+            pourcentage_budget = data["pourcentage_budget"]
+            if pourcentage_budget == 0:
+                pourcentage_budget = self.calculer_pourcentage_budget(date_debut, date_fin)
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO taches (projet_id, nom, date_debut, date_fin, details, pourcentage_budget) VALUES (?, ?, ?, ?, ?, ?)',
+                           (self.projet_id, nom, data["date_debut"], data["date_fin"], details, pourcentage_budget))
+            conn.commit()
+            conn.close()
+            self.load_tasks()
+
+    def delete_task(self):
+        idx = self.table.currentRow()
+        if idx < 0:
+            QMessageBox.warning(self, "Supprimer", "Sélectionnez une tâche à supprimer.")
+            return
+        # Confirmation avant suppression
+        confirm = QMessageBox.question(self, "Confirmation", "Voulez-vous vraiment supprimer cette tâche ?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM taches WHERE projet_id=?', (self.projet_id,))
+        rows = cursor.fetchall()
+        if idx >= len(rows):
+            QMessageBox.warning(self, "Supprimer", "Tâche introuvable.")
+            conn.close()
+            return
+        task_id = rows[idx][0]
+        cursor.execute('DELETE FROM taches WHERE id=?', (task_id,))
+        conn.commit()
+        conn.close()
+        self.load_tasks()
+
+    def edit_task(self):
+        idx = self.table.currentRow()
+        if idx < 0:
+            QMessageBox.warning(self, "Modifier", "Sélectionnez une tâche à modifier.")
+            return
+        nom = self.table.item(idx, 0).text()
+        date_debut = self.table.item(idx, 1).text()
+        date_fin = self.table.item(idx, 2).text()
+        details = self.table.item(idx, 3).text()
+        pourcentage_budget = self.table.item(idx, 4).text()
+        dialog = AddTaskDialog(self, nom, date_debut, date_fin, details, pourcentage_budget)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            data = dialog.get_data()
+            nom = data["nom"]
+            date_debut = parse_date_fr(data["date_debut"])
+            date_fin = parse_date_fr(data["date_fin"])
+            details = data["details"]
+            pourcentage_budget = data["pourcentage_budget"]
+            if pourcentage_budget == 0:
+                pourcentage_budget = self.calculer_pourcentage_budget(date_debut, date_fin)
+            task_id = self.task_ids[idx]
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('UPDATE taches SET nom=?, date_debut=?, date_fin=?, details=?, pourcentage_budget=? WHERE id=?',
+                           (nom, data["date_debut"], data["date_fin"], details, pourcentage_budget, task_id))
+            conn.commit()
+            conn.close()
+            self.load_tasks()
+
+    def calculer_pourcentage_budget(self, date_debut, date_fin):
+        # date_debut et date_fin sont au format YYYY-MM-DD
+        try:
+            from datetime import datetime
+            if date_debut and date_fin:
+                d1 = datetime.strptime(date_debut, "%Y-%m-%d")
+                d2 = datetime.strptime(date_fin, "%Y-%m-%d")
+                nb_jours = (d2 - d1).days + 1
+                return nb_jours
+        except Exception:
+            pass
+        return 0
+
+class AddTaskDialog(QDialog):
+    def __init__(self, parent=None, nom='', date_debut='', date_fin='', details='', pourcentage_budget=''):
+        super().__init__(parent)
+        self.setWindowTitle("Ajouter une tâche" if not nom else "Modifier la tâche")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Nom de la tâche :"))
+        self.nom_edit = QLineEdit()
+        self.nom_edit.setText(nom)
+        layout.addWidget(self.nom_edit)
+        layout.addWidget(QLabel("Date de début :"))
+        self.date_debut_edit = QDateEdit()
+        self.date_debut_edit.setCalendarPopup(True)
+        self.date_debut_edit.setDisplayFormat("dd/MM/yyyy")
+        if date_debut:
+            from datetime import datetime
+            try:
+                d = datetime.strptime(date_debut, "%d/%m/%Y")
+                self.date_debut_edit.setDate(QDate(d.year, d.month, d.day))
+            except Exception:
+                self.date_debut_edit.setDate(QDate.currentDate())
+        else:
+            self.date_debut_edit.setDate(QDate.currentDate())
+        layout.addWidget(self.date_debut_edit)
+        layout.addWidget(QLabel("Date de fin :"))
+        self.date_fin_edit = QDateEdit()
+        self.date_fin_edit.setCalendarPopup(True)
+        self.date_fin_edit.setDisplayFormat("dd/MM/yyyy")
+        if date_fin:
+            from datetime import datetime
+            try:
+                d = datetime.strptime(date_fin, "%d/%m/%Y")
+                self.date_fin_edit.setDate(QDate(d.year, d.month, d.day))
+            except Exception:
+                self.date_fin_edit.setDate(QDate.currentDate())
+        else:
+            self.date_fin_edit.setDate(QDate.currentDate())
+        layout.addWidget(self.date_fin_edit)
+        layout.addWidget(QLabel("Détails :"))
+        self.details_edit = QTextEdit()
+        self.details_edit.setPlainText(details)
+        layout.addWidget(self.details_edit)
+        layout.addWidget(QLabel("Pourcentage du budget :"))
+        self.pourcentage_edit = QDoubleSpinBox()
+        self.pourcentage_edit.setRange(0, 100)
+        self.pourcentage_edit.setDecimals(2)
+        self.pourcentage_edit.setSuffix(" %")
+        if pourcentage_budget:
+            try:
+                self.pourcentage_edit.setValue(float(pourcentage_budget))
+            except Exception:
+                self.pourcentage_edit.setValue(0)
+        layout.addWidget(self.pourcentage_edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+
+    def validate_and_accept(self):
+        nom = self.nom_edit.text().strip()
+        date_debut = self.date_debut_edit.date().toString("dd/MM/yyyy")
+        date_fin = self.date_fin_edit.date().toString("dd/MM/yyyy")
+        if not nom:
+            QMessageBox.warning(self, "Champ obligatoire", "Le nom de la tâche est obligatoire.")
+            return
+        if not date_debut:
+            QMessageBox.warning(self, "Champ obligatoire", "La date de début est obligatoire.")
+            return
+        if not date_fin:
+            QMessageBox.warning(self, "Champ obligatoire", "La date de fin est obligatoire.")
+            return
+        self.accept()
+
+    def get_data(self):
+        return {
+            "nom": self.nom_edit.text(),
+            "date_debut": self.date_debut_edit.date().toString("dd/MM/yyyy"),
+            "date_fin": self.date_fin_edit.date().toString("dd/MM/yyyy"),
+            "details": self.details_edit.toPlainText(),
+            "pourcentage_budget": self.pourcentage_edit.value()
+        }
+
+def parse_date_fr(date_str):
+    # Convertit une date DD/MM/YYYY en YYYY-MM-DD pour le stockage/calcul
+    try:
+        from datetime import datetime
+        d = datetime.strptime(date_str, "%d/%m/%Y")
+        return d.strftime("%Y-%m-%d")
+    except Exception:
+        return ""

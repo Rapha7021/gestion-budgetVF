@@ -117,14 +117,17 @@ class ProjectDetailsDialog(QDialog):
         btn_hbox.addWidget(add_btn)
         btn_hbox.addWidget(edit_btn)
         btn_hbox.addWidget(del_btn)
-        # Boutons import Excel et impression résultat
+        # Boutons import Excel et impression budget
         import_excel_btn = QPushButton("Importer Excel")
-        print_result_btn = QPushButton("Imprimer résultat")
+        print_result_btn = QPushButton("Imprimer le budget")
         btn_hbox.addWidget(import_excel_btn)
         btn_hbox.addWidget(print_result_btn)
         # Nouveau bouton "Modifier le budget"
         edit_budget_btn = QPushButton("Modifier le budget")
         btn_hbox.addWidget(edit_budget_btn)
+        # Ajout du bouton "Gérer les tâches"
+        manage_tasks_btn = QPushButton("Gérer les tâches")
+        btn_hbox.addWidget(manage_tasks_btn)
         main_layout.addLayout(btn_hbox)
 
         self.projet_id = projet_id
@@ -139,6 +142,8 @@ class ProjectDetailsDialog(QDialog):
         print_result_btn.clicked.connect(self.handle_print_result)
         # Connexion du bouton "Modifier le budget"
         edit_budget_btn.clicked.connect(self.edit_budget)
+        # Connexion du bouton "Gérer les tâches"
+        manage_tasks_btn.clicked.connect(self.open_task_manager)
 
         # Espace vide en dessous
         main_layout.addStretch()
@@ -238,4 +243,9 @@ class ProjectDetailsDialog(QDialog):
         from budget_edit_dialog import BudgetEditDialog
         dlg = BudgetEditDialog(self.projet_id, self)
         dlg.exec()
-    
+
+    def open_task_manager(self):
+        from task_manager_dialog import TaskManagerDialog
+        dlg = TaskManagerDialog(self, self.projet_id)
+        dlg.exec()
+

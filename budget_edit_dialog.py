@@ -321,7 +321,7 @@ class BudgetEditDialog(QDialog):
                     categorie = self.table_budget.item(row_index, 0).text()
                     
                     cursor.execute("""
-                        INSERT INTO temps_travail (projet_id, annee, direction, categorie, mois, jours)
+                        INSERT OR REPLACE INTO temps_travail (projet_id, annee, direction, categorie, mois, jours)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, (self.projet_id, int(year), current_direction, categorie, mois, jours))
                 conn.commit()
