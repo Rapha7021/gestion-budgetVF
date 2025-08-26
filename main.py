@@ -174,6 +174,7 @@ class MainWindow(QWidget):
         self.btn_delete = QPushButton('Supprimer')
         self.btn_themes = QPushButton('Gérer les thèmes')
         self.btn_couts_categorie = QPushButton('Coûts par catégorie')
+        self.btn_cir = QPushButton('CIR')
         self.btn_directions = QPushButton('Gérer les directions')
         self.btn_couts_categorie.setToolTip(
             "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
@@ -183,6 +184,7 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_themes)
         btn_layout.addWidget(self.btn_couts_categorie, alignment=Qt.AlignmentFlag.AlignRight)
+        btn_layout.addWidget(self.btn_cir, alignment=Qt.AlignmentFlag.AlignRight)
         btn_layout.addWidget(self.btn_directions)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
@@ -192,6 +194,7 @@ class MainWindow(QWidget):
         self.btn_themes.clicked.connect(self.open_theme_manager)
         self.project_table.cellDoubleClicked.connect(self.show_project_details)
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
+        self.btn_cir.clicked.connect(self.open_cir_dialog)
         self.btn_directions.clicked.connect(self.open_direction_manager)
 
     def open_categorie_cout_dialog(self):
@@ -223,6 +226,11 @@ class MainWindow(QWidget):
 
     def open_direction_manager(self):
         dialog = DirectionManager(self)
+        dialog.exec()
+
+    def open_cir_dialog(self):
+        from cir_dialog import CIRDialog
+        dialog = CIRDialog(self)
         dialog.exec()
 
     def show_project_details(self, row, column):
