@@ -52,9 +52,33 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS investissements (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
+        nom TEXT,
         montant REAL,
         date_achat TEXT,
         duree INTEGER,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    # Migration : Ajouter la colonne nom si elle n'existe pas
+    try:
+        cursor.execute("ALTER TABLE investissements ADD COLUMN nom TEXT")
+    except sqlite3.OperationalError:
+        # La colonne existe déjà, on continue
+        pass
+    cursor.execute('''CREATE TABLE IF NOT EXISTS subventions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        nom TEXT,
+        depenses_temps_travail INTEGER,
+        coef_temps_travail REAL,
+        depenses_externes INTEGER,
+        coef_externes REAL,
+        depenses_autres_achats INTEGER,
+        coef_autres_achats REAL,
+        depenses_dotation_amortissements INTEGER,
+        coef_dotation_amortissements REAL,
+        cd REAL,
+        taux REAL,
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
@@ -267,24 +291,25 @@ class ProjectForm(QDialog):
         grid.addWidget(self.etat_combo, row, 1)
         self.cir_check = QCheckBox('Ajouter un CIR')
         grid.addWidget(self.cir_check, row, 2)
-        self.subv_check = QCheckBox('Ajouter une subvention')
-        grid.addWidget(self.subv_check, row, 3)
         row += 1
-        # Détails projet (sur toute la largeur)
+        # Détails projet (sur toute la largeur) - version compacte
         grid.addWidget(QLabel('Détails projet:'), row, 0)
         self.details_edit = QTextEdit()
+        self.details_edit.setMaximumHeight(60)  # Hauteur limitée
         grid.addWidget(self.details_edit, row, 1, 1, 3)
         row += 1
-        # Thèmes (recherche + tags)
+        # Thèmes (recherche + tags) - version très compacte
         theme_group = QGroupBox('Thèmes')
         theme_vbox = QVBoxLayout()
         self.theme_search = QLineEdit()
         self.theme_search.setPlaceholderText('Rechercher un thème...')
         self.theme_listwidget = QListWidget()
+        self.theme_listwidget.setMaximumHeight(50)  # Encore plus petit
         theme_vbox.addWidget(self.theme_search)
         theme_vbox.addWidget(self.theme_listwidget)
         self.tag_area = QScrollArea()
         self.tag_area.setWidgetResizable(True)
+        self.tag_area.setMaximumHeight(30)  # Encore plus petit pour les tags
         self.tag_widget = QWidget()
         self.tag_layout = QHBoxLayout()
         self.tag_layout.setContentsMargins(0,0,0,0)
@@ -292,39 +317,56 @@ class ProjectForm(QDialog):
         self.tag_area.setWidget(self.tag_widget)
         theme_vbox.addWidget(self.tag_area)
         theme_group.setLayout(theme_vbox)
-        grid.addWidget(theme_group, row, 0, 2, 2)
+        grid.addWidget(theme_group, row, 0, 1, 2)  # Réduit à 1 rangée au lieu de 2
         self.selected_themes = []
         self.theme_search.textChanged.connect(self.filter_themes)
         self.theme_listwidget.itemClicked.connect(self.add_theme_tag)
         self.load_themes()
-        # Images (groupe à part)
+        # Images (groupe à part) - version très compacte
         img_group = QGroupBox('Images')
         img_vbox = QVBoxLayout()
         self.btn_add_image = QPushButton('Ajouter image')
         self.btn_add_image.clicked.connect(self.add_image)
         img_vbox.addWidget(self.btn_add_image)
         self.images_list = QListWidget()
+        self.images_list.setMaximumHeight(50)  # Encore plus petit
         img_vbox.addWidget(self.images_list)
         img_group.setLayout(img_vbox)
-        grid.addWidget(img_group, row, 2, 2, 2)
+        grid.addWidget(img_group, row, 2, 1, 2)  # Réduit à 1 rangée au lieu de 2
         # Ajout du menu contextuel pour suppression d'image
         self.images_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.images_list.customContextMenuRequested.connect(self.image_context_menu)
-        row += 2
-        # Investissements (groupe à part)
+        row += 1  # Incrément réduit
+        # Investissements et Subventions côte à côte
         invest_group = QGroupBox('Investissements')
         invest_vbox = QVBoxLayout()
         self.btn_add_invest = QPushButton('Ajouter investissement')
         self.btn_add_invest.clicked.connect(self.add_invest)
         invest_vbox.addWidget(self.btn_add_invest)
         self.invest_list = QListWidget()
+        self.invest_list.setMaximumHeight(40)  # Encore plus petit
         self.invest_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.invest_list.customContextMenuRequested.connect(self.invest_context_menu)
         self.invest_list.itemDoubleClicked.connect(self.edit_invest)
         invest_vbox.addWidget(self.invest_list)
         invest_group.setLayout(invest_vbox)
-        grid.addWidget(invest_group, row, 0, 2, 2)
-        # Equipe (groupe à part) - nouvelle version
+        grid.addWidget(invest_group, row, 0, 1, 2)  # Côté gauche
+        # Subventions (côté droit) - avec bouton d'ajout
+        subv_group = QGroupBox('Subventions')
+        subv_vbox = QVBoxLayout()
+        self.btn_add_subv = QPushButton('Ajouter subvention')
+        self.btn_add_subv.clicked.connect(self.add_subvention)
+        subv_vbox.addWidget(self.btn_add_subv)
+        self.subv_list = QListWidget()
+        self.subv_list.setMaximumHeight(40)  # Encore plus petit
+        self.subv_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.subv_list.customContextMenuRequested.connect(self.subv_context_menu)
+        self.subv_list.itemDoubleClicked.connect(self.edit_subvention)
+        subv_vbox.addWidget(self.subv_list)
+        subv_group.setLayout(subv_vbox)
+        grid.addWidget(subv_group, row, 2, 1, 2)  # Côté droit
+        row += 1
+        # Equipe (sur toute la largeur mais plus compacte)
         equipe_group = QGroupBox('Équipe par direction')
         equipe_vbox = QVBoxLayout()
         self.direction_combo = QComboBox()
@@ -355,8 +397,8 @@ class ProjectForm(QDialog):
             equipe_form.addRow(label, spin)
         equipe_vbox.addLayout(equipe_form)
         equipe_group.setLayout(equipe_vbox)
-        grid.addWidget(equipe_group, row, 2, 2, 2)
-        row += 2
+        grid.addWidget(equipe_group, row, 0, 1, 4)  # Sur toute la largeur mais 1 seule rangée
+        row += 1
             # --- Ajout : gestion des effectifs par direction ---
         self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
         self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
@@ -371,6 +413,10 @@ class ProjectForm(QDialog):
             
         self._current_direction = self.direction_combo.currentText()  # <-- Ajout ici
         # Pas besoin d'appeler on_direction_changed explicitement ici
+        
+        # Initialisation des données de subventions
+        self.subventions_data = []
+        
         self.layout.insertLayout(0, grid)
          # Boutons valider/annuler
         btns = QHBoxLayout()
@@ -468,14 +514,22 @@ class ProjectForm(QDialog):
         # Parse l'investissement existant
         txt = item.text()
         try:
-            montant = txt.split('Montant: ')[1].split(' €')[0]
-            date_achat = txt.split('Date achat: ')[1].split(',')[0]
-            duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
+            if 'Nom: ' in txt:
+                nom = txt.split('Nom: ')[1].split(',')[0].strip()
+                montant = txt.split('Montant: ')[1].split(' €')[0]
+                date_achat = txt.split('Date achat: ')[1].split(',')[0]
+                duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
+            else:
+                # Format ancien sans nom
+                nom = ""
+                montant = txt.split('Montant: ')[1].split(' €')[0]
+                date_achat = txt.split('Date achat: ')[1].split(',')[0]
+                duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
         except Exception:
-            montant, date_achat, duree = '', '', ''
-        dialog = InvestDialog(self, montant, date_achat, duree)
+            nom, montant, date_achat, duree = '', '', '', ''
+        dialog = InvestDialog(self, nom, montant, date_achat, duree)
         if dialog.exec():
-            invest_str = f"Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
+            invest_str = f"Nom: {dialog.nom_edit.text()}, Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
             item.setText(invest_str)
 
     def add_theme_tag(self, item):
@@ -544,8 +598,62 @@ class ProjectForm(QDialog):
     def add_invest(self):
         dialog = InvestDialog(self)
         if dialog.exec():
-            invest_str = f"Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
+            invest_str = f"Nom: {dialog.nom_edit.text()}, Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
             self.invest_list.addItem(invest_str)
+
+    def add_subvention(self):
+        from subvention_dialog import SubventionDialog
+        dialog = SubventionDialog(self)
+        if dialog.exec():
+            data = dialog.get_data()
+            self.subventions_data.append(data)
+            cats = []
+            if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
+            if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
+            if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
+            if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
+            subv_str = f"{', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            self.subv_list.addItem(subv_str)
+
+    def subv_context_menu(self, pos):
+        item = self.subv_list.itemAt(pos)
+        if item:
+            menu = QMenu()
+            edit_action = menu.addAction('Modifier')
+            delete_action = menu.addAction('Supprimer')
+            action = menu.exec(self.subv_list.mapToGlobal(pos))
+            if action == edit_action:
+                self.edit_subvention(item)
+            elif action == delete_action:
+                confirm = QMessageBox.question(
+                    self,
+                    'Confirmation',
+                    'Voulez-vous vraiment supprimer cette subvention ?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if confirm == QMessageBox.StandardButton.Yes:
+                    row = self.subv_list.row(item)
+                    self.subv_list.takeItem(row)
+                    if row < len(self.subventions_data):
+                        self.subventions_data.pop(row)
+
+    def edit_subvention(self, item):
+        row = self.subv_list.row(item)
+        if row >= len(self.subventions_data):
+            return
+        from subvention_dialog import SubventionDialog
+        existing_data = self.subventions_data[row]
+        dialog = SubventionDialog(self, existing_data)
+        if dialog.exec():
+            data = dialog.get_data()
+            self.subventions_data[row] = data
+            cats = []
+            if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
+            if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
+            if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
+            if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
+            subv_str = f"{', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            item.setText(subv_str)
 
     def save_project(self):
         conn = sqlite3.connect(DB_PATH)
@@ -562,7 +670,7 @@ class ProjectForm(QDialog):
                 self.chef_edit.text().strip(),
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
-                int(self.subv_check.isChecked()),
+                1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
                 self.projet_id
             ))
             projet_id = self.projet_id
@@ -586,12 +694,25 @@ class ProjectForm(QDialog):
             for i in range(self.invest_list.count()):
                 txt = self.invest_list.item(i).text()
                 try:
-                    montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                    date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                    duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    cursor.execute('INSERT INTO investissements (projet_id, montant, date_achat, duree) VALUES (?, ?, ?, ?)', (projet_id, montant, date_achat, duree))
+                    if 'Nom: ' in txt:
+                        nom = txt.split('Nom: ')[1].split(',')[0].strip()
+                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    else:
+                        # Format ancien sans nom
+                        nom = ""
+                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    cursor.execute('INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) VALUES (?, ?, ?, ?, ?)', (projet_id, nom, montant, date_achat, duree))
                 except Exception:
                     pass
+            # Met à jour les subventions
+            cursor.execute('DELETE FROM subventions WHERE projet_id=?', (projet_id,))
+            for data in self.subventions_data:
+                cursor.execute('INSERT INTO subventions (projet_id, nom, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+                    (projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux']))
             # Met à jour l'équipe
             cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
             # Sauvegarde la dernière direction affichée dans le dictionnaire
@@ -615,7 +736,7 @@ class ProjectForm(QDialog):
                 self.chef_edit.text().strip(),
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
-                int(self.subv_check.isChecked())
+                1 if len(self.subventions_data) > 0 else 0  # Automatique selon la liste
             ))
             projet_id = cursor.lastrowid
             # Enregistre les thèmes liés
@@ -635,12 +756,24 @@ class ProjectForm(QDialog):
             for i in range(self.invest_list.count()):
                 txt = self.invest_list.item(i).text()
                 try:
-                    montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                    date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                    duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    cursor.execute('INSERT INTO investissements (projet_id, montant, date_achat, duree) VALUES (?, ?, ?, ?)', (projet_id, montant, date_achat, duree))
+                    if 'Nom: ' in txt:
+                        nom = txt.split('Nom: ')[1].split(',')[0].strip()
+                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    else:
+                        # Format ancien sans nom
+                        nom = ""
+                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
+                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
+                    cursor.execute('INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) VALUES (?, ?, ?, ?, ?)', (projet_id, nom, montant, date_achat, duree))
                 except Exception:
                     pass
+            # Enregistre les subventions
+            for data in self.subventions_data:
+                cursor.execute('INSERT INTO subventions (projet_id, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+                    (projet_id, data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], data.get('nom', '')))
             # Enregistre l'équipe
             # Sauvegarde la dernière direction affichée dans le dictionnaire
             if hasattr(self, '_current_direction') and self._current_direction is not None:
@@ -683,7 +816,7 @@ class ProjectForm(QDialog):
             if idx >= 0:
                 self.etat_combo.setCurrentIndex(idx)
             self.cir_check.setChecked(bool(res[8]))
-            self.subv_check.setChecked(bool(res[9]))
+            # Note: subvention est maintenant gérée automatiquement via la liste
             
         # Thèmes liés
         cursor.execute('SELECT t.nom FROM projet_themes pt JOIN themes t ON pt.theme_id = t.id WHERE pt.projet_id=?', (self.projet_id,))
@@ -698,10 +831,39 @@ class ProjectForm(QDialog):
             
         # Investissements liés
         self.invest_list.clear()
-        cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
-        for montant, date_achat, duree in cursor.fetchall():
-            invest_str = f"Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
+        cursor.execute('SELECT nom, montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
+        for nom, montant, date_achat, duree in cursor.fetchall():
+            nom_display = nom if nom else "Sans nom"  # Gestion des anciens investissements sans nom
+            invest_str = f"Nom: {nom_display}, Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
             self.invest_list.addItem(invest_str)
+            
+        # Subventions liées
+        self.subv_list.clear()
+        self.subventions_data = []
+        cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom FROM subventions WHERE projet_id=?', (self.projet_id,))
+        for subv in cursor.fetchall():
+            data = {
+                'depenses_temps_travail': subv[0],
+                'coef_temps_travail': subv[1],
+                'depenses_externes': subv[2],
+                'coef_externes': subv[3],
+                'depenses_autres_achats': subv[4],
+                'coef_autres_achats': subv[5],
+                'depenses_dotation_amortissements': subv[6],
+                'coef_dotation_amortissements': subv[7],
+                'cd': subv[8],
+                'taux': subv[9],
+                'nom': subv[10]
+            }
+            self.subventions_data.append(data)
+            cats = []
+            if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
+            if subv[2]: cats.append(f"Externes (coef {subv[3]})")
+            if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
+            if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
+            nom = subv[10] if subv[10] else "Sans nom"
+            subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
+            self.subv_list.addItem(subv_str)
             
         # Initialiser self.equipe_data avec des valeurs par défaut pour toutes les directions
         self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
@@ -773,13 +935,15 @@ class ProjectForm(QDialog):
         # Si clic droit sur une zone vide, rien ne se passe
 
 class InvestDialog(QDialog):
-    def __init__(self, parent=None, montant='', date_achat='', duree=''):
+    def __init__(self, parent=None, nom='', montant='', date_achat='', duree=''):
         super().__init__(parent)
         self.setWindowTitle('Ajouter investissement')
         layout = QFormLayout()
+        self.nom_edit = QLineEdit(nom)
         self.montant_edit = QLineEdit(montant)
         self.date_achat = QLineEdit(date_achat)
         self.duree_edit = QLineEdit(duree)
+        layout.addRow('Nom:', self.nom_edit)
         layout.addRow('Montant (€):', self.montant_edit)
         layout.addRow('Date achat (MM/AAAA):', self.date_achat)
         layout.addRow('Durée amortissement (ans):', self.duree_edit)
@@ -794,9 +958,14 @@ class InvestDialog(QDialog):
         self.setLayout(layout)
 
     def validate_and_accept(self):
+        nom = self.nom_edit.text().strip()
         montant = self.montant_edit.text().replace(',', '.').strip()
         date_achat = self.date_achat.text().strip()
         duree = self.duree_edit.text().strip()
+        # Contrôle nom
+        if not nom:
+            QMessageBox.warning(self, 'Erreur', 'Le nom de l\'investissement est obligatoire.')
+            return
         # Contrôle montant
         try:
             if float(montant) <= 0:

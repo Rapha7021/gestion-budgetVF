@@ -41,6 +41,24 @@ class BudgetEditDialog(QDialog):
         """)
         conn.commit()
         conn.close()
+        # --- Création table autres_depenses si besoin ---
+        conn = sqlite3.connect('gestion_budget.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS autres_depenses (
+                projet_id INTEGER,
+                annee INTEGER,
+                ligne_index INTEGER,
+                mois TEXT,
+                montant REAL,
+                detail TEXT,
+                PRIMARY KEY (projet_id, annee, ligne_index, mois)
+            )
+        """)
+            
+        conn.commit()
+        conn.close()
         super().__init__(parent)
         self.projet_id = projet_id
         self.setWindowTitle("Budget du Projet")
@@ -68,9 +86,11 @@ class BudgetEditDialog(QDialog):
         self.budget_data = {}  # {annee: {(direction, categorie, mois): jours}}
         self.recettes_data = {}  # {annee: {(categorie, mois): (montant, detail)}}
         self.depenses_data = {}  # {annee: {(categorie, mois): (montant, detail)}}
+        self.autres_depenses_data = {}  # {annee: {(ligne_index, mois): (montant, detail)}}
         self.modified = False  # Pour savoir si des modifs non enregistrées existent
         self.recettes_modified = False
         self.depenses_modified = False
+        self.autres_depenses_modified = False
         self.depenses_categories = [
             "Salaires",
             "Achats",
@@ -128,11 +148,13 @@ class BudgetEditDialog(QDialog):
         btn_layout = QHBoxLayout()
         self.btn_temps = QPushButton("Temps de travail")
         self.btn_recettes = QPushButton("Recettes")
-        self.btn_depenses = QPushButton("Dépenses")
-        self.btns = [self.btn_temps, self.btn_recettes, self.btn_depenses]
+        self.btn_depenses = QPushButton("Dépenses externes")
+        self.btn_autres_depenses = QPushButton("Autres dépenses")
+        self.btns = [self.btn_temps, self.btn_recettes, self.btn_depenses, self.btn_autres_depenses]
         btn_layout.addWidget(self.btn_temps)
         btn_layout.addWidget(self.btn_recettes)
         btn_layout.addWidget(self.btn_depenses)
+        btn_layout.addWidget(self.btn_autres_depenses)
 
         # Ajout du surlignage et des connexions dans le constructeur
         def update_button_styles(active_idx):
@@ -145,6 +167,7 @@ class BudgetEditDialog(QDialog):
         self.btn_temps.clicked.connect(lambda: (self.stacked.setCurrentIndex(0), self.update_button_styles(0)))
         self.btn_recettes.clicked.connect(lambda: (self.stacked.setCurrentIndex(1), self.update_button_styles(1)))
         self.btn_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(2), self.update_button_styles(2)))
+        self.btn_autres_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(3), self.update_button_styles(3)))
         self.update_button_styles(0)
 
         # --- Regroupe année + boutons ---
@@ -718,6 +741,190 @@ class BudgetEditDialog(QDialog):
         self.annee_combo.currentTextChanged.connect(lambda year: build_depenses_table_for_year(year))
         self.stacked.addWidget(depenses_widget)
 
+            # --- Panneau Autres Dépenses ---
+        autres_depenses_widget = QWidget()
+        self.autres_depenses_layout = QVBoxLayout(autres_depenses_widget)
+        self.autres_depenses_table = None
+
+        def build_autres_depenses_table_for_year(year):
+            if hasattr(self, "current_autres_depenses_year") and self.autres_depenses_table:
+                self.save_autres_depenses_table_to_memory(self.current_autres_depenses_year)
+            self.current_autres_depenses_year = year
+
+            for i in reversed(range(self.autres_depenses_layout.count())):
+                widget = self.autres_depenses_layout.itemAt(i).widget()
+                if widget:
+                    widget.setParent(None)
+
+            months = get_months_for_year(year)
+            colonnes = []
+            for _, mois in months:
+                colonnes.extend([f"{mois} - Montant", f"{mois} - Détail"])
+
+            table = QTableWidget()
+            table.setRowCount(5)  # 5 lignes par défaut
+            table.setColumnCount(len(colonnes))
+            table.setHorizontalHeaderLabels(colonnes)
+
+            for col in range(len(colonnes)):
+                if "Montant" in colonnes[col]:
+                    table.setColumnWidth(col, 120)
+                elif "Détail" in colonnes[col]:
+                    table.setColumnWidth(col, 200)
+
+            for row in range(table.rowCount()):
+                for col in range(len(colonnes)):
+                    item_mois = QTableWidgetItem("")
+                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(row, col, item_mois)
+
+            btn_add_row = QPushButton("Ajouter une ligne")
+            def add_row():
+                table.insertRow(table.rowCount())
+                for col in range(len(colonnes)):
+                    item_mois = QTableWidgetItem("")
+                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(table.rowCount()-1, col, item_mois)
+            btn_add_row.clicked.connect(add_row)
+
+            # Charge les données depuis la base de données
+            self.load_autres_depenses_data_from_db_for_year(year, table, colonnes)
+
+            double_validator = QDoubleValidator(0.0, 9999999.99, 2)
+                # Si des modifications non enregistrées existent, restaure la mémoire
+            if self.autres_depenses_modified:
+                self.restore_autres_depenses_table_from_memory(year, table, colonnes)
+            double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+            def on_item_changed(item):
+                col = item.column()
+                if "Montant" in colonnes[col]:
+                    value = item.text()
+                    state = double_validator.validate(value, 0)[0]
+                    if state != QDoubleValidator.State.Acceptable and value != "":
+                        item.setText("")
+                        return
+                self.autres_depenses_modified = True
+            table.itemChanged.connect(on_item_changed)
+
+            self.autres_depenses_layout.addWidget(table)
+            self.autres_depenses_layout.addWidget(btn_add_row)
+            aide_label = QLabel("Remplissez les montants et détails pour chaque autre dépense.")
+            self.autres_depenses_layout.addWidget(aide_label)
+            self.autres_depenses_table = table
+            self.autres_depenses_colonnes = colonnes
+
+            btn_save = QPushButton("Enregistrer")
+            def save_autres_depenses_to_db():
+                self.save_autres_depenses_table_to_memory(year)
+                conn = sqlite3.connect('gestion_budget.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(year)))
+                for key, (montant, detail) in self.autres_depenses_data.get(year, {}).items():
+                    ligne_index, mois = key
+                    if montant or detail:
+                        cursor.execute("""
+                            INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (self.projet_id, int(year), ligne_index, mois, montant or 0, detail or ""))
+                conn.commit()
+                conn.close()
+                self.autres_depenses_modified = False
+                QMessageBox.information(self, "Enregistrement", "Les autres dépenses ont été enregistrées.")
+            btn_save.clicked.connect(save_autres_depenses_to_db)
+            self.autres_depenses_layout.addWidget(btn_save)
+
+        def save_autres_depenses_table_to_memory(self, year):
+            if not hasattr(self, 'autres_depenses_table') or not hasattr(self, 'autres_depenses_colonnes'):
+                return
+            table = self.autres_depenses_table
+            colonnes = self.autres_depenses_colonnes
+            data = {}
+            for row in range(table.rowCount()):
+                col_index = 0
+                while col_index < len(colonnes):
+                    if col_index + 1 < len(colonnes):
+                        col_montant_name = colonnes[col_index]
+                        mois = col_montant_name.split(" - ")[0]
+                        montant_item = table.item(row, col_index)
+                        detail_item = table.item(row, col_index + 1)
+                        montant = montant_item.text() if montant_item else ""
+                        detail = detail_item.text() if detail_item else ""
+                        try:
+                            montant_val = float(montant) if montant else 0
+                        except Exception:
+                            montant_val = 0
+                        if montant_val != 0 or detail:
+                            key = (row, mois)  # Ajout de l'index de ligne pour distinguer les lignes
+                            data[key] = (montant_val, detail)
+                    col_index += 2
+            self.autres_depenses_data[year] = data
+
+        def load_autres_depenses_data_from_db_for_year(self, year, table, colonnes):
+            conn = sqlite3.connect('gestion_budget.db')
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ligne_index, mois, montant, detail 
+                FROM autres_depenses 
+                WHERE projet_id=? AND annee=?
+            """, (self.projet_id, int(year)))
+            rows = cursor.fetchall()
+            conn.close()
+            if not rows:
+                return
+            
+            # Met à jour aussi les données en mémoire
+            data = {}
+            for ligne_index, mois, montant, detail in rows:
+                # Ajoute aux données mémoire
+                key = (ligne_index, mois)
+                data[key] = (montant or 0, detail or "")
+                
+                # Met dans le tableau
+                if ligne_index < table.rowCount():
+                    for col in range(0, len(colonnes), 2):
+                        mois_col = colonnes[col].split(" - ")[0]
+                        if mois_col == mois:
+                            table.blockSignals(True)
+                            table.item(ligne_index, col).setText(str(montant) if montant else "")
+                            table.item(ligne_index, col+1).setText(detail if detail else "")
+                            table.blockSignals(False)
+                            break
+            
+            # Sauvegarde les données en mémoire
+            self.autres_depenses_data[year] = data
+
+        def restore_autres_depenses_table_from_memory(self, year, table, colonnes):
+            """Restaure les valeurs du tableau autres dépenses à partir de la mémoire pour l'année donnée"""
+            data = self.autres_depenses_data.get(year, {})
+            
+            for row in range(table.rowCount()):
+                col_index = 0
+                while col_index < len(colonnes):
+                    if col_index + 1 < len(colonnes):
+                        col_montant_name = colonnes[col_index]
+                        mois = col_montant_name.split(" - ")[0]
+                        key = (row, mois)
+                        montant, detail = data.get(key, (0, ""))
+                        montant_item = table.item(row, col_index)
+                        detail_item = table.item(row, col_index + 1)
+                        if montant_item and detail_item:
+                            table.blockSignals(True)
+                            if montant != 0:
+                                montant_item.setText(str(montant))
+                            else:
+                                montant_item.setText("")
+                            detail_item.setText(detail)
+                            table.blockSignals(False)
+                    col_index += 2
+
+        self.save_autres_depenses_table_to_memory = save_autres_depenses_table_to_memory.__get__(self)
+        self.load_autres_depenses_data_from_db_for_year = load_autres_depenses_data_from_db_for_year.__get__(self)
+        self.restore_autres_depenses_table_from_memory = restore_autres_depenses_table_from_memory.__get__(self)
+
+        build_autres_depenses_table_for_year(self.annee_combo.currentText())
+        self.annee_combo.currentTextChanged.connect(lambda year: build_autres_depenses_table_for_year(year))
+        self.stacked.addWidget(autres_depenses_widget)
+
         # --- Connexion des boutons ---
         self.btn_temps.clicked.connect(lambda: (self.stacked.setCurrentIndex(0), self.update_button_styles(0)))
         self.btn_recettes.clicked.connect(lambda: (self.stacked.setCurrentIndex(1), self.update_button_styles(1)))
@@ -729,7 +936,7 @@ class BudgetEditDialog(QDialog):
 
         # --- Gestion fermeture : avertir si non enregistré ---
         def closeEvent(event):
-            if self.modified or self.recettes_modified or self.depenses_modified:
+            if self.modified or self.recettes_modified or self.depenses_modified or self.autres_depenses_modified:
                 reply = QMessageBox.question(
                     self,
                     "Modifications non enregistrées",
