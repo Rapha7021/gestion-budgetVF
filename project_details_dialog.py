@@ -46,7 +46,7 @@ class ProjectDetailsDialog(QDialog):
         right_vbox.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
         right_vbox.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
         right_vbox.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
-        right_vbox.addWidget(QLabel(f"<b>Chef de projet :</b> {projet[6]}"))
+        right_vbox.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
         grid.addLayout(right_vbox, 0, 1)
         # Centre haut
         center_vbox = QVBoxLayout()
@@ -155,8 +155,8 @@ class ProjectDetailsDialog(QDialog):
         dlg.exec()
 
     def handle_print_result(self):
-        from print_result_action import print_result_action
-        print_result_action(self, self.projet_id)
+        from print_result_action import show_print_config_dialog
+        show_print_config_dialog(self, self.projet_id)
     def load_actualites(self):
         self.actualites_list.clear()
         conn = sqlite3.connect(DB_PATH)
