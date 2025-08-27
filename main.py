@@ -286,13 +286,11 @@ class ProjectForm(QDialog):
         self.chef_edit = QLineEdit()
         grid.addWidget(self.chef_edit, row, 3)
         row += 1
-        # Etat projet, CIR, Subvention côte à côte
+        # Etat projet
         grid.addWidget(QLabel('Etat projet:'), row, 0)
         self.etat_combo = QComboBox()
         self.etat_combo.addItems(['Terminé', 'En cours', 'Futur'])
         grid.addWidget(self.etat_combo, row, 1)
-        self.cir_check = QCheckBox('Ajouter un CIR')
-        grid.addWidget(self.cir_check, row, 2)
         row += 1
         # Détails projet (sur toute la largeur) - version compacte
         grid.addWidget(QLabel('Détails projet:'), row, 0)
@@ -339,7 +337,7 @@ class ProjectForm(QDialog):
         self.images_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.images_list.customContextMenuRequested.connect(self.image_context_menu)
         row += 1  # Incrément réduit
-        # Investissements et Subventions côte à côte
+        # Investissements et Subventions empilés à gauche, Équipe à droite
         invest_group = QGroupBox('Investissements')
         invest_vbox = QVBoxLayout()
         self.btn_add_invest = QPushButton('Ajouter investissement')
@@ -352,8 +350,9 @@ class ProjectForm(QDialog):
         self.invest_list.itemDoubleClicked.connect(self.edit_invest)
         invest_vbox.addWidget(self.invest_list)
         invest_group.setLayout(invest_vbox)
-        grid.addWidget(invest_group, row, 0, 1, 2)  # Côté gauche
-        # Subventions (côté droit) - avec bouton d'ajout
+        grid.addWidget(invest_group, row, 0, 1, 2)  # Colonne gauche
+        
+        # Subventions juste en dessous des investissements
         subv_group = QGroupBox('Subventions')
         subv_vbox = QVBoxLayout()
         self.btn_add_subv = QPushButton('Ajouter subvention')
@@ -366,9 +365,13 @@ class ProjectForm(QDialog):
         self.subv_list.itemDoubleClicked.connect(self.edit_subvention)
         subv_vbox.addWidget(self.subv_list)
         subv_group.setLayout(subv_vbox)
-        grid.addWidget(subv_group, row, 2, 1, 2)  # Côté droit
-        row += 1
-        # Equipe (sur toute la largeur mais plus compacte)
+        grid.addWidget(subv_group, row + 1, 0, 1, 2)  # Colonne gauche, ligne suivante
+        
+        # Checkbox CIR juste en dessous des subventions
+        self.cir_check = QCheckBox('Ajouter un CIR')
+        grid.addWidget(self.cir_check, row + 2, 0, 1, 2)  # En dessous des subventions
+        
+        # Équipe par direction (côté droit, sur 2 rangées)
         equipe_group = QGroupBox('Équipe par direction')
         equipe_vbox = QVBoxLayout()
         self.direction_combo = QComboBox()
@@ -399,7 +402,8 @@ class ProjectForm(QDialog):
             equipe_form.addRow(label, spin)
         equipe_vbox.addLayout(equipe_form)
         equipe_group.setLayout(equipe_vbox)
-        grid.addWidget(equipe_group, row, 0, 1, 4)  # Sur toute la largeur mais 1 seule rangée
+        grid.addWidget(equipe_group, row, 2, 3, 2)  # Côté droit, sur 3 rangées
+        row += 3
         row += 1
             # --- Ajout : gestion des effectifs par direction ---
         self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}

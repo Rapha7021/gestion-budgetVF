@@ -62,7 +62,7 @@ class SubventionDialog(QDialog):
         self.cd_spin = QDoubleSpinBox()
         self.cd_spin.setValue(1)
         self.cd_spin.setDecimals(2)
-        self.cd_spin.setRange(0, 1)  # Coefficient entre 0 et 1
+        self.cd_spin.setRange(1, 2)  # Coefficient entre 1 et 2
         self.cd_spin.setSingleStep(0.01)  # Pas de 0.01
         layout.addRow('Cd :', self.cd_spin)
         self.taux_spin = QDoubleSpinBox()
