@@ -217,12 +217,18 @@ class MainWindow(QWidget):
         self.project_table.setRowCount(0)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute('SELECT id, code, nom, chef, etat FROM projets ORDER BY id DESC')
-        for row_idx, (pid, code, nom, chef, etat) in enumerate(cursor.fetchall()):
+        # Jointure pour récupérer le nom complet du chef de projet
+        cursor.execute('''
+            SELECT p.id, p.code, p.nom, c.nom || ' ' || c.prenom AS chef_complet, p.etat
+            FROM projets p
+            LEFT JOIN chefs_projet c ON p.chef = c.id
+            ORDER BY p.id DESC
+        ''')
+        for row_idx, (pid, code, nom, chef_complet, etat) in enumerate(cursor.fetchall()):
             self.project_table.insertRow(row_idx)
             self.project_table.setItem(row_idx, 0, QTableWidgetItem(str(code)))
             self.project_table.setItem(row_idx, 1, QTableWidgetItem(str(nom)))
-            self.project_table.setItem(row_idx, 2, QTableWidgetItem(str(chef)))
+            self.project_table.setItem(row_idx, 2, QTableWidgetItem(str(chef_complet) if chef_complet else "Non assigné"))
             self.project_table.setItem(row_idx, 3, QTableWidgetItem(str(etat)))
         conn.close()
 
@@ -298,9 +304,10 @@ class ProjectForm(QDialog):
         grid.addWidget(QLabel('Livrables principaux:'), row, 0)
         self.livrables_edit = QLineEdit()
         grid.addWidget(self.livrables_edit, row, 1)
-        grid.addWidget(QLabel('Nom chef de projet:'), row, 2)
-        self.chef_edit = QLineEdit()
-        grid.addWidget(self.chef_edit, row, 3)
+        grid.addWidget(QLabel('Chef de projet:'), row, 2)
+        self.chef_combo = QComboBox()
+        self.load_chefs_projet()
+        grid.addWidget(self.chef_combo, row, 3)
         row += 1
         # Etat projet
         grid.addWidget(QLabel('Etat projet:'), row, 0)
@@ -465,7 +472,7 @@ class ProjectForm(QDialog):
         self.nom_edit.textChanged.connect(self.check_form_valid)
         self.details_edit.textChanged.connect(self.check_form_valid)
         self.livrables_edit.textChanged.connect(self.check_form_valid)
-        self.chef_edit.textChanged.connect(self.check_form_valid)
+        self.chef_combo.currentIndexChanged.connect(self.check_form_valid)
         self.theme_listwidget.itemSelectionChanged.connect(self.check_form_valid)
         self.check_form_valid()
         # Charger les données du projet si modification
@@ -489,6 +496,15 @@ class ProjectForm(QDialog):
         
         # Mettre à jour le combo box avec les thèmes déjà sélectionnés
         self.update_theme_tags()
+
+    def load_chefs_projet(self):
+        """Load project managers into the dropdown list."""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, nom, prenom, direction FROM chefs_projet')
+        for chef_id, nom, prenom, direction in cursor.fetchall():
+            self.chef_combo.addItem(f"{nom} {prenom} - {direction}", chef_id)
+        conn.close()
 
     def on_direction_changed(self, direction):
         # Sauvegarde les valeurs courantes dans la direction précédente
@@ -711,7 +727,7 @@ class ProjectForm(QDialog):
                 self.date_debut.text(),
                 self.date_fin.text(),
                 self.livrables_edit.text().strip(),
-                self.chef_edit.text().strip(),
+                self.chef_combo.currentData(),  # Utilise l'ID du chef sélectionné
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
                 1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
@@ -737,7 +753,7 @@ class ProjectForm(QDialog):
                 self.date_debut.text(),
                 self.date_fin.text(),
                 self.livrables_edit.text().strip(),
-                self.chef_edit.text().strip(),
+                self.chef_combo.currentData(),  # Utilise l'ID du chef sélectionné
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
                 1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
@@ -772,7 +788,11 @@ class ProjectForm(QDialog):
             except Exception:
                 pass
             self.livrables_edit.setText(str(res[5]))
-            self.chef_edit.setText(str(res[6]))
+            # Mise à jour pour chef_combo
+            chef_id = res[6]
+            index = self.chef_combo.findData(chef_id)
+            if index != -1:
+                self.chef_combo.setCurrentIndex(index)
             idx = self.etat_combo.findText(str(res[7]))
             if idx >= 0:
                 self.etat_combo.setCurrentIndex(idx)
@@ -785,7 +805,7 @@ class ProjectForm(QDialog):
                 idx = self.theme_principal_combo.findText(theme_principal)
                 if idx >= 0:
                     self.theme_principal_combo.setCurrentIndex(idx)
-            
+        
         # Thèmes liés
         cursor.execute('SELECT t.nom FROM projet_themes pt JOIN themes t ON pt.theme_id = t.id WHERE pt.projet_id=?', (self.projet_id,))
         self.selected_themes = [nom for (nom,) in cursor.fetchall()]

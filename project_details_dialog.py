@@ -13,31 +13,82 @@ class ProjectDetailsDialog(QDialog):
         self.show()
         main_layout = QVBoxLayout()
         grid = QGridLayout()
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?''', (projet_id,))
-        projet = cursor.fetchone()
-        # Thèmes
-        cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (projet_id,))
-        themes = [nom for (nom,) in cursor.fetchall()]
-        # Investissements
-        cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (projet_id,))
-        investissements = cursor.fetchall()
-        # Equipe
-        cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (projet_id,))
-        equipe = cursor.fetchall()
-        # Images
-        cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (projet_id,))
-        images = cursor.fetchall()
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT p.code, p.nom, p.details, p.date_debut, p.date_fin, p.livrables, 
+                       c.nom || ' ' || c.prenom || ' - ' || c.direction AS chef_complet, 
+                       p.etat, p.cir, p.subvention, p.theme_principal
+                FROM projets p
+                LEFT JOIN chefs_projet c ON p.chef = c.id
+                WHERE p.id=?
+            ''', (projet_id,))
+            projet = cursor.fetchone()
+            
+            # Thèmes
+            cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (projet_id,))
+            themes = [nom for (nom,) in cursor.fetchall()]
+            # Investissements
+            cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (projet_id,))
+            investissements = cursor.fetchall()
+            # Equipe
+            cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (projet_id,))
+            equipe = cursor.fetchall()
+            # Images
+            cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (projet_id,))
+            images = cursor.fetchall()
+            
+            # Calcul des coûts
+            cursor.execute('''
+                SELECT t.categorie, SUM(t.jours) AS total_jours
+                FROM temps_travail t
+                WHERE t.projet_id = ?
+                GROUP BY t.categorie
+            ''', (projet_id,))
+            categories_jours = cursor.fetchall()
+            
+            # Mapping entre les libellés complets et les codes courts
+            mapping_categories = {
+                "Stagiaire Projet": "STP",
+                "Assistante / opérateur": "AOP", 
+                "Technicien": "TEP",
+                "Junior": "IJP",
+                "Senior": "ISP",
+                "Expert": "EDP",
+                "Collaborateur moyen": "MOY"
+            }
+            
+            couts = {"charge": 0, "direct": 0, "complet": 0}
+            for categorie, total_jours in categories_jours:
+                # Convertir le libellé en code court
+                code_categorie = mapping_categories.get(categorie, categorie)
+                
+                cursor.execute('''
+                    SELECT montant_charge, cout_production, cout_complet
+                    FROM categorie_cout
+                    WHERE categorie = ?
+                ''', (code_categorie,))
+                res = cursor.fetchone()
+                
+                if res:
+                    montant_charge, cout_production, cout_complet = res
+                    couts["charge"] += (montant_charge or 0) * total_jours
+                    couts["direct"] += (cout_production or 0) * total_jours
+                    couts["complet"] += (cout_complet or 0) * total_jours
+                    
+        # Affichage des coûts
+        budget_vbox = QVBoxLayout()
+        budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
+        budget_vbox.addWidget(QLabel(f"Coût chargé : {couts['charge']:.2f} €"))
+        budget_vbox.addWidget(QLabel(f"Coût direct : {couts['direct']:.2f} €"))
+        budget_vbox.addWidget(QLabel(f"Coût complet : {couts['complet']:.2f} €"))
+        grid.addLayout(budget_vbox, 0, 2)
+        
         # En haut à gauche
         left_vbox = QVBoxLayout()
         left_vbox.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
         h_nom = QHBoxLayout()
         h_nom.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
-        if themes:
-            theme_lbl = QLabel("<b>Thèmes :</b> " + ", ".join(themes))
-            h_nom.addWidget(theme_lbl)
         left_vbox.addLayout(h_nom)
         left_vbox.addWidget(QLabel(f"<b>Détails :</b> {projet[2]}"))
         grid.addLayout(left_vbox, 0, 0)
@@ -47,6 +98,10 @@ class ProjectDetailsDialog(QDialog):
         right_vbox.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
         right_vbox.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
         right_vbox.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
+        if projet[10]:
+            right_vbox.addWidget(QLabel(f"<b>Thème principal :</b> {projet[10]}"))
+        if themes:
+            right_vbox.addWidget(QLabel("<b>Thèmes :</b> " + ", ".join(themes)))
         grid.addLayout(right_vbox, 0, 1)
         # Centre haut
         center_vbox = QVBoxLayout()
