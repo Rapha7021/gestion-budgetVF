@@ -18,86 +18,126 @@ class PrintConfigDialog(QDialog):
         self.parent = parent
         self.projet_id = projet_id
         self.setWindowTitle("Configuration du Compte de Résultat")
-        self.setMinimumSize(600, 400)
-        
+        self.setMinimumSize(600, 600)
+
         layout = QVBoxLayout()
-        
+
         # Titre
         title = QLabel("Configuration du Compte de Résultat")
         title.setStyleSheet("font-size: 16pt; font-weight: bold; margin-bottom: 20px;")
         layout.addWidget(title)
-        
+
         # Sélection du projet
         project_group = QGroupBox("Sélection du projet")
         project_layout = QVBoxLayout()
-        
+
+        # Options de sélection
+        self.selection_type_group = QButtonGroup(self)
+
+        self.radio_single_project = QRadioButton("Un projet spécifique")
+        self.radio_all_projects = QRadioButton("Tous les projets")
+        self.radio_multiple_projects = QRadioButton("Sélection de certains projets")
+        self.radio_by_theme = QRadioButton("Sélection par thèmes")
+
+        self.selection_type_group.addButton(self.radio_single_project)
+        self.selection_type_group.addButton(self.radio_all_projects)
+        self.selection_type_group.addButton(self.radio_multiple_projects)
+        self.selection_type_group.addButton(self.radio_by_theme)
+
+        self.radio_single_project.setChecked(True)
+
+        project_layout.addWidget(self.radio_single_project)
+        project_layout.addWidget(self.radio_all_projects)
+        project_layout.addWidget(self.radio_multiple_projects)
+        project_layout.addWidget(self.radio_by_theme)
+
+        # Widgets dynamiques pour les options
         self.project_combo = QComboBox()
+        self.project_list_widget = QListWidget()
+        self.theme_list_widget = QListWidget()
+
         self.load_projects()
-        project_layout.addWidget(QLabel("Projet:"))
+        self.load_themes()
+
         project_layout.addWidget(self.project_combo)
-        
+        project_layout.addWidget(self.project_list_widget)
+        project_layout.addWidget(self.theme_list_widget)
+
+        self.project_combo.hide()
+        self.project_list_widget.hide()
+        self.theme_list_widget.hide()
+
+        self.radio_single_project.toggled.connect(self.update_selection_widgets)
+        self.radio_all_projects.toggled.connect(self.update_selection_widgets)
+        self.radio_multiple_projects.toggled.connect(self.update_selection_widgets)
+        self.radio_by_theme.toggled.connect(self.update_selection_widgets)
+
         project_group.setLayout(project_layout)
         layout.addWidget(project_group)
-        
+
         # Sélection de la période
         period_group = QGroupBox("Période")
         period_layout = QVBoxLayout()
-        
+
         # Type de période
         self.period_type = QComboBox()
-        self.period_type.addItems(["Année complète", "Mois spécifique", "Période complète du projet"])
+        self.period_type.addItems(["Année spécifique", "Plusieurs années", "Période globale du projet"])
         self.period_type.currentIndexChanged.connect(self.update_period_widgets)
         period_layout.addWidget(QLabel("Type de période:"))
         period_layout.addWidget(self.period_type)
-        
-        # Sélection de l'année
-        year_layout = QHBoxLayout()
-        year_layout.addWidget(QLabel("Année:"))
+
+        # Sélection d'une année spécifique
         self.year_spin = QSpinBox()
         self.year_spin.setRange(2000, 2100)
         self.year_spin.setValue(datetime.datetime.now().year)
-        year_layout.addWidget(self.year_spin)
-        year_layout.addStretch()
-        period_layout.addLayout(year_layout)
-        
-        # Sélection du mois
-        month_layout = QHBoxLayout()
-        month_layout.addWidget(QLabel("Mois:"))
-        self.month_combo = QComboBox()
-        months = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
-                 "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-        self.month_combo.addItems(months)
-        self.month_combo.setCurrentIndex(datetime.datetime.now().month - 1)
-        month_layout.addWidget(self.month_combo)
-        month_layout.addStretch()
-        
-        self.month_widget = QWidget()
-        self.month_widget.setLayout(month_layout)
-        period_layout.addWidget(self.month_widget)
-        
+        period_layout.addWidget(self.year_spin)
+
+        # Sélection de plusieurs années
+        self.years_list_widget = QListWidget()
+        self.years_list_widget.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        for year in range(2000, 2101):
+            item = QListWidgetItem(str(year))
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.years_list_widget.addItem(item)
+        period_layout.addWidget(self.years_list_widget)
+
+        # Granularité (par mois ou par an)
+        granularity_group = QGroupBox("Granularité")
+        granularity_layout = QHBoxLayout()
+
+        self.radio_monthly = QRadioButton("Par mois")
+        self.radio_yearly = QRadioButton("Par an")
+        self.radio_yearly.setChecked(True)
+
+        granularity_layout.addWidget(self.radio_monthly)
+        granularity_layout.addWidget(self.radio_yearly)
+        granularity_group.setLayout(granularity_layout)
+        period_layout.addWidget(granularity_group)
+
         period_group.setLayout(period_layout)
         layout.addWidget(period_group)
-        
+
         # Boutons
         buttons_layout = QHBoxLayout()
-        
+
         generate_btn = QPushButton("Générer le Compte de Résultat")
         generate_btn.clicked.connect(self.generate_compte_resultat)
         generate_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }")
-        
+
         cancel_btn = QPushButton("Annuler")
         cancel_btn.clicked.connect(self.reject)
-        
+
         buttons_layout.addStretch()
         buttons_layout.addWidget(generate_btn)
         buttons_layout.addWidget(cancel_btn)
-        
+
         layout.addLayout(buttons_layout)
         self.setLayout(layout)
-        
+
         # Initialiser l'affichage
-        self.update_period_widgets(0)
-    
+        self.update_period_widgets()
+        self.update_selection_widgets()
+
     def load_projects(self):
         """Charge les projets depuis la base de données"""
         conn = sqlite3.connect(DB_PATH)
@@ -105,39 +145,225 @@ class PrintConfigDialog(QDialog):
         cursor.execute("SELECT id, code, nom FROM projets ORDER BY code")
         projects = cursor.fetchall()
         conn.close()
-        
+
         self.project_combo.clear()
+        self.project_list_widget.clear()
+
         for project_id, code, name in projects:
             self.project_combo.addItem(f"{code} - {name}", project_id)
+            item = QListWidgetItem(f"{code} - {name}")
+            item.setData(Qt.ItemDataRole.UserRole, project_id)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.project_list_widget.addItem(item)
+        
+        # Connecter le signal pour recharger les années quand on coche/décoche des projets
+        self.project_list_widget.itemChanged.connect(self.on_project_selection_changed)
+
+    def load_themes(self):
+        """Charge les thèmes depuis la base de données"""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nom FROM themes ORDER BY nom")
+        themes = cursor.fetchall()
+        conn.close()
+
+        self.theme_list_widget.clear()
+
+        for theme_id, name in themes:
+            item = QListWidgetItem(name)
+            item.setData(Qt.ItemDataRole.UserRole, theme_id)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.theme_list_widget.addItem(item)
+        
+        # Connecter le signal pour recharger les années quand on coche/décoche des thèmes
+        self.theme_list_widget.itemChanged.connect(self.on_project_selection_changed)
+
+    def on_project_selection_changed(self):
+        """Appelée quand la sélection de projets ou thèmes change"""
+        # Recharger les années seulement si on est en mode "Plusieurs années"
+        if self.period_type.currentIndex() == 1:
+            self.load_years_with_projects()
+
+    def get_selected_project_ids(self):
+        """Retourne la liste des IDs des projets sélectionnés selon l'option choisie"""
+        project_ids = []
+        
+        if self.radio_single_project.isChecked():
+            # Un projet spécifique
+            project_id = self.project_combo.currentData()
+            if project_id:
+                project_ids = [project_id]
+                
+        elif self.radio_all_projects.isChecked():
+            # Tous les projets
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM projets")
+            project_ids = [row[0] for row in cursor.fetchall()]
+            conn.close()
             
-            # Présélectionner le projet courant si défini
-            if project_id == self.projet_id:
-                self.project_combo.setCurrentIndex(self.project_combo.count() - 1)
-    
-    def update_period_widgets(self, index):
+        elif self.radio_multiple_projects.isChecked():
+            # Projets sélectionnés dans la liste
+            for i in range(self.project_list_widget.count()):
+                item = self.project_list_widget.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    project_ids.append(item.data(Qt.ItemDataRole.UserRole))
+                    
+        elif self.radio_by_theme.isChecked():
+            # Projets par thèmes sélectionnés
+            selected_theme_ids = []
+            for i in range(self.theme_list_widget.count()):
+                item = self.theme_list_widget.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected_theme_ids.append(item.data(Qt.ItemDataRole.UserRole))
+            
+            if selected_theme_ids:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                placeholders = ','.join('?' * len(selected_theme_ids))
+                cursor.execute(f"""
+                    SELECT DISTINCT projet_id FROM projet_themes 
+                    WHERE theme_id IN ({placeholders})
+                """, selected_theme_ids)
+                project_ids = [row[0] for row in cursor.fetchall()]
+                conn.close()
+        
+        return project_ids
+
+    def load_years_with_projects(self):
+        """Charge les années où des projets sélectionnés existent depuis la base de données"""
+        project_ids = self.get_selected_project_ids()
+        
+        if not project_ids:
+            # Ne pas afficher de message d'erreur, juste vider la liste
+            self.years_list_widget.clear()
+            return
+            
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            # Récupérer les projets sélectionnés avec leurs dates
+            placeholders = ','.join('?' * len(project_ids))
+            cursor.execute(f"""
+                SELECT date_debut, date_fin FROM projets 
+                WHERE id IN ({placeholders})
+                AND date_debut IS NOT NULL AND date_debut LIKE '__/____'
+            """, project_ids)
+            
+            years_set = set()
+            
+            for date_debut, date_fin in cursor.fetchall():
+                # Extraire l'année de début
+                if date_debut and len(date_debut) >= 7:
+                    year_debut = int(date_debut[-4:])
+                    years_set.add(year_debut)
+                    
+                    # Si il y a une date de fin, ajouter toutes les années entre début et fin
+                    if date_fin and len(date_fin) >= 7 and date_fin.count('/') == 1:
+                        try:
+                            year_fin = int(date_fin[-4:])
+                            # Ajouter toutes les années entre début et fin (incluses)
+                            for year in range(year_debut, year_fin + 1):
+                                years_set.add(year)
+                        except (ValueError, IndexError):
+                            # Si la conversion échoue, on ignore la date de fin
+                            pass
+
+            years = sorted(list(years_set))
+
+            if not years:
+                QMessageBox.warning(self, "Aucune année trouvée", "Aucune année avec des projets sélectionnés n'a été trouvée.")
+
+            self.years_list_widget.clear()
+            for year in years:
+                item = QListWidgetItem(str(year))
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self.years_list_widget.addItem(item)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors du chargement des années : {str(e)}")
+        finally:
+            conn.close()
+
+    def update_period_widgets(self):
         """Met à jour l'affichage selon le type de période sélectionné"""
-        if index == 0:  # Année complète
-            self.month_widget.hide()
-        elif index == 1:  # Mois spécifique
-            self.month_widget.show()
-        else:  # Période complète du projet
-            self.month_widget.hide()
-    
+        period_type = self.period_type.currentIndex()
+
+        if period_type == 0:  # Année spécifique
+            self.year_spin.show()
+            self.years_list_widget.hide()
+        elif period_type == 1:  # Plusieurs années
+            self.year_spin.hide()
+            self.years_list_widget.show()
+            # Recharger les années dès qu'on affiche cette option
+            self.load_years_with_projects()
+        else:  # Période globale du projet
+            self.year_spin.hide()
+            self.years_list_widget.hide()
+
+    def update_selection_widgets(self):
+        """Met à jour les widgets de sélection en fonction de l'option choisie"""
+        if self.radio_single_project.isChecked():
+            self.project_combo.show()
+            self.project_list_widget.hide()
+            self.theme_list_widget.hide()
+
+            # Pré-sélectionner le projet courant si défini
+            if self.projet_id is not None:
+                index = self.project_combo.findData(self.projet_id)
+                if index != -1:
+                    self.project_combo.setCurrentIndex(index)
+
+        elif self.radio_all_projects.isChecked():
+            self.project_combo.hide()
+            self.project_list_widget.hide()
+            self.theme_list_widget.hide()
+        elif self.radio_multiple_projects.isChecked():
+            self.project_combo.hide()
+            self.project_list_widget.show()
+            self.theme_list_widget.hide()
+        elif self.radio_by_theme.isChecked():
+            self.project_combo.hide()
+            self.project_list_widget.hide()
+            self.theme_list_widget.show()
+        
+        # Recharger les années si on est en mode "Plusieurs années" et seulement pour "Tous les projets"
+        if self.period_type.currentIndex() == 1 and self.radio_all_projects.isChecked():
+            self.load_years_with_projects()
+
     def get_selected_project_id(self):
         """Retourne l'ID du projet sélectionné"""
-        return self.project_combo.currentData()
-    
+        if self.radio_single_project.isChecked():
+            return self.project_combo.currentData()
+        elif self.radio_multiple_projects.isChecked():
+            # Récupérer les projets sélectionnés dans la liste
+            selected_items = self.project_list_widget.selectedItems()
+            return [item.data(Qt.ItemDataRole.UserRole) for item in selected_items]
+        else:
+            return None
+
+    def get_selected_theme_ids(self):
+        """Retourne les IDs des thèmes sélectionnés"""
+        if self.radio_by_theme.isChecked():
+            # Récupérer les thèmes sélectionnés dans la liste
+            selected_items = self.theme_list_widget.selectedItems()
+            return [item.data(Qt.ItemDataRole.UserRole) for item in selected_items]
+        else:
+            return None
+
     def get_selected_period(self):
         """Retourne les informations de période sélectionnée"""
         project_id = self.get_selected_project_id()
         year = self.year_spin.value()
         
-        if self.period_type.currentIndex() == 0:  # Année complète
+        if self.period_type.currentIndex() == 0:  # Année spécifique
             return project_id, year, None
-        elif self.period_type.currentIndex() == 1:  # Mois spécifique
-            month = self.month_combo.currentIndex() + 1
-            return project_id, year, month
-        else:  # Période complète du projet
+        elif self.period_type.currentIndex() == 1:  # Plusieurs années
+            # Récupérer les années sélectionnées dans la liste
+            selected_items = self.years_list_widget.selectedItems()
+            years = [int(item.text()) for item in selected_items]
+            return project_id, years, None
+        else:  # Période globale du projet
             return project_id, None, "complete_project"
     
     def generate_compte_resultat(self):
@@ -221,7 +447,7 @@ class CompteResultatDialog(QDialog):
         refresh_btn = QPushButton("Actualiser")
         refresh_btn.clicked.connect(self.refresh_compte_resultat)
         config_layout.addWidget(refresh_btn)
-        config_layout.addStretch()
+        config_layout.addStretch();
         
         layout.addLayout(config_layout)
         
@@ -269,7 +495,7 @@ class CompteResultatDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Erreur", f"Erreur lors de la génération du compte de résultat: {str(e)}")
     
-    def collecter_donnees_compte_resultat(self):
+    def collector_donnees_compte_resultat(self):
         """Collecte toutes les données nécessaires pour le compte de résultat"""
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()

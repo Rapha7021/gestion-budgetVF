@@ -33,7 +33,8 @@ def init_db():
         chef TEXT,
         etat TEXT,
         cir INTEGER,
-        subvention INTEGER
+        subvention INTEGER,
+        theme_principal TEXT
     )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS projet_themes (
         projet_id INTEGER,
@@ -93,6 +94,13 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS directions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nom TEXT UNIQUE NOT NULL
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chefs_projet (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nom TEXT NOT NULL,
+        prenom TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        FOREIGN KEY(direction) REFERENCES directions(nom)
     )''')
     conn.commit()
     conn.close()
@@ -176,6 +184,7 @@ class MainWindow(QWidget):
         self.btn_couts_categorie = QPushButton('Coûts par catégorie')
         self.btn_cir = QPushButton('CIR')
         self.btn_directions = QPushButton('Gérer les directions')
+        self.btn_project_managers = QPushButton('Gérer les chefs de projet')
         self.btn_couts_categorie.setToolTip(
             "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
         )
@@ -186,6 +195,7 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_couts_categorie, alignment=Qt.AlignmentFlag.AlignRight)
         btn_layout.addWidget(self.btn_cir, alignment=Qt.AlignmentFlag.AlignRight)
         btn_layout.addWidget(self.btn_directions)
+        btn_layout.addWidget(self.btn_project_managers)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.btn_new.clicked.connect(self.open_project_form)
@@ -196,6 +206,7 @@ class MainWindow(QWidget):
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
         self.btn_cir.clicked.connect(self.open_cir_dialog)
         self.btn_directions.clicked.connect(self.open_direction_manager)
+        self.btn_project_managers.clicked.connect(self.open_project_manager_dialog)
 
     def open_categorie_cout_dialog(self):
         from categorie_cout_dialog import CategorieCoutDialog
@@ -231,6 +242,11 @@ class MainWindow(QWidget):
     def open_cir_dialog(self):
         from cir_dialog import CIRDialog
         dialog = CIRDialog(self)
+        dialog.exec()
+
+    def open_project_manager_dialog(self):
+        from project_manager_dialog import ProjectManagerDialog
+        dialog = ProjectManagerDialog()
         dialog.exec()
 
     def show_project_details(self, row, column):
@@ -316,6 +332,15 @@ class ProjectForm(QDialog):
         self.tag_widget.setLayout(self.tag_layout)
         self.tag_area.setWidget(self.tag_widget)
         theme_vbox.addWidget(self.tag_area)
+        
+        # Ajout du QComboBox pour le thème principal dans le groupe thèmes
+        theme_principal_layout = QHBoxLayout()
+        theme_principal_layout.addWidget(QLabel('Thème principal:'))
+        self.theme_principal_combo = QComboBox()
+        theme_principal_layout.addWidget(self.theme_principal_combo)
+        theme_principal_layout.addStretch()  # Pour aligner à gauche
+        theme_vbox.addLayout(theme_principal_layout)
+        
         theme_group.setLayout(theme_vbox)
         grid.addWidget(theme_group, row, 0, 1, 2)  # Réduit à 1 rangée au lieu de 2
         self.selected_themes = []
@@ -462,6 +487,9 @@ class ProjectForm(QDialog):
         self.btn_import_excel.clicked.connect(self.import_excel_dialog)
         self.layout.insertWidget(0, self.btn_import_excel)
         
+        # Mettre à jour le combo box avec les thèmes déjà sélectionnés
+        self.update_theme_tags()
+
     def on_direction_changed(self, direction):
         # Sauvegarde les valeurs courantes dans la direction précédente
         if hasattr(self, '_current_direction') and self._current_direction is not None:
@@ -556,10 +584,10 @@ class ProjectForm(QDialog):
         for nom in self.selected_themes:
             tag = QWidget()
             tag_layout = QHBoxLayout()
-            tag_layout.setContentsMargins(5,2,5,2)
+            tag_layout.setContentsMargins(5, 2, 5, 2)
             lbl = QLabel(nom)
             btn = QPushButton('✕')
-            btn.setFixedSize(20,20)
+            btn.setFixedSize(20, 20)
             btn.setStyleSheet('QPushButton { border: none; background: #eee; }')
             btn.clicked.connect(lambda _, n=nom: self.remove_theme_tag(n))
             tag_layout.addWidget(lbl)
@@ -567,6 +595,11 @@ class ProjectForm(QDialog):
             tag.setLayout(tag_layout)
             self.tag_layout.addWidget(tag)
         self.tag_layout.addStretch()
+
+        # Met à jour le QComboBox pour le thème principal (si il existe)
+        if hasattr(self, 'theme_principal_combo'):
+            self.theme_principal_combo.clear()
+            self.theme_principal_combo.addItems(self.selected_themes)
 
     def remove_theme_tag(self, nom):
         if nom in self.selected_themes:
@@ -668,9 +701,10 @@ class ProjectForm(QDialog):
     def save_project(self):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        theme_principal = self.theme_principal_combo.currentText()  # Récupère le thème principal
         if self.projet_id:
             # Mise à jour du projet existant
-            cursor.execute('''UPDATE projets SET code=?, nom=?, details=?, date_debut=?, date_fin=?, livrables=?, chef=?, etat=?, cir=?, subvention=? WHERE id=?''', (
+            cursor.execute('''UPDATE projets SET code=?, nom=?, details=?, date_debut=?, date_fin=?, livrables=?, chef=?, etat=?, cir=?, subvention=?, theme_principal=? WHERE id=?''', (
                 self.code_edit.text().strip(),
                 self.nom_edit.text().strip(),
                 self.details_edit.toPlainText().strip(),
@@ -681,6 +715,7 @@ class ProjectForm(QDialog):
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
                 1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
+                theme_principal,
                 self.projet_id
             ))
             projet_id = self.projet_id
@@ -692,51 +727,10 @@ class ProjectForm(QDialog):
                 if res:
                     theme_id = res[0]
                     cursor.execute('INSERT INTO projet_themes (projet_id, theme_id) VALUES (?, ?)', (projet_id, theme_id))
-            # Met à jour les images
-            cursor.execute('DELETE FROM images WHERE projet_id=?', (projet_id,))
-            for i in range(self.images_list.count()):
-                img_path = os.path.join(os.path.dirname(__file__), self.images_list.item(i).text())
-                with open(img_path, 'rb') as f:
-                    data = f.read()
-                cursor.execute('INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)', (projet_id, os.path.basename(img_path), data))
-            # Met à jour les investissements
-            cursor.execute('DELETE FROM investissements WHERE projet_id=?', (projet_id,))
-            for i in range(self.invest_list.count()):
-                txt = self.invest_list.item(i).text()
-                try:
-                    if 'Nom: ' in txt:
-                        nom = txt.split('Nom: ')[1].split(',')[0].strip()
-                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    else:
-                        # Format ancien sans nom
-                        nom = ""
-                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    cursor.execute('INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) VALUES (?, ?, ?, ?, ?)', (projet_id, nom, montant, date_achat, duree))
-                except Exception:
-                    pass
-            # Met à jour les subventions
-            cursor.execute('DELETE FROM subventions WHERE projet_id=?', (projet_id,))
-            for data in self.subventions_data:
-                cursor.execute('INSERT INTO subventions (projet_id, nom, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
-                    (projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux']))
-            # Met à jour l'équipe
-            cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
-            # Sauvegarde la dernière direction affichée dans le dictionnaire
-            if hasattr(self, '_current_direction') and self._current_direction is not None:
-                for label in self.equipe_types_labels:
-                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
-            for direction, types_dict in self.equipe_data.items():
-                for label, nombre in types_dict.items():
-                    if nombre > 0:
-                        cursor.execute('INSERT INTO equipe (projet_id, type, nombre, direction) VALUES (?, ?, ?, ?)', (projet_id, label, nombre, direction))
         else:
             # Création d'un nouveau projet
-            cursor.execute('''INSERT INTO projets (code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+            cursor.execute('''INSERT INTO projets (code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention, theme_principal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
                 self.code_edit.text().strip(),
                 self.nom_edit.text().strip(),
                 self.details_edit.toPlainText().strip(),
@@ -746,53 +740,10 @@ class ProjectForm(QDialog):
                 self.chef_edit.text().strip(),
                 self.etat_combo.currentText(),
                 int(self.cir_check.isChecked()),
-                1 if len(self.subventions_data) > 0 else 0  # Automatique selon la liste
+                1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
+                theme_principal
             ))
             projet_id = cursor.lastrowid
-            # Enregistre les thèmes liés
-            for nom in self.selected_themes:
-                cursor.execute('SELECT id FROM themes WHERE nom=?', (nom,))
-                res = cursor.fetchone()
-                if res:
-                    theme_id = res[0]
-                    cursor.execute('INSERT INTO projet_themes (projet_id, theme_id) VALUES (?, ?)', (projet_id, theme_id))
-            # Enregistre les images en BLOB
-            for i in range(self.images_list.count()):
-                img_path = os.path.join(os.path.dirname(__file__), self.images_list.item(i).text())
-                with open(img_path, 'rb') as f:
-                    data = f.read()
-                cursor.execute('INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)', (projet_id, os.path.basename(img_path), data))
-            # Enregistre les investissements
-            for i in range(self.invest_list.count()):
-                txt = self.invest_list.item(i).text()
-                try:
-                    if 'Nom: ' in txt:
-                        nom = txt.split('Nom: ')[1].split(',')[0].strip()
-                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    else:
-                        # Format ancien sans nom
-                        nom = ""
-                        montant = float(txt.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
-                        date_achat = txt.split('Date achat: ')[1].split(',')[0].strip()
-                        duree = int(txt.split('Durée amort.: ')[1].split(' ans')[0].strip())
-                    cursor.execute('INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) VALUES (?, ?, ?, ?, ?)', (projet_id, nom, montant, date_achat, duree))
-                except Exception:
-                    pass
-            # Enregistre les subventions
-            for data in self.subventions_data:
-                cursor.execute('INSERT INTO subventions (projet_id, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
-                    (projet_id, data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], data.get('nom', '')))
-            # Enregistre l'équipe
-            # Sauvegarde la dernière direction affichée dans le dictionnaire
-            if hasattr(self, '_current_direction') and self._current_direction is not None:
-                for label in self.equipe_types_labels:
-                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
-            for direction, types_dict in self.equipe_data.items():
-                for label, nombre in types_dict.items():
-                    if nombre > 0:
-                        cursor.execute('INSERT INTO equipe (projet_id, type, nombre, direction) VALUES (?, ?, ?, ?)', (projet_id, label, nombre, direction))
         conn.commit()
         conn.close()
         self.accept()
@@ -802,7 +753,7 @@ class ProjectForm(QDialog):
         cursor = conn.cursor()
         
         # Chargement des données de base du projet
-        cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention FROM projets WHERE id=?', (self.projet_id,))
+        cursor.execute('SELECT code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention, theme_principal FROM projets WHERE id=?', (self.projet_id,))
         res = cursor.fetchone()
         if res:
             self.code_edit.setText(str(res[0]))
@@ -827,6 +778,13 @@ class ProjectForm(QDialog):
                 self.etat_combo.setCurrentIndex(idx)
             self.cir_check.setChecked(bool(res[8]))
             # Note: subvention est maintenant gérée automatiquement via la liste
+            
+            # Thème principal
+            theme_principal = res[10] if len(res) > 10 and res[10] else ""
+            if theme_principal and hasattr(self, 'theme_principal_combo'):
+                idx = self.theme_principal_combo.findText(theme_principal)
+                if idx >= 0:
+                    self.theme_principal_combo.setCurrentIndex(idx)
             
         # Thèmes liés
         cursor.execute('SELECT t.nom FROM projet_themes pt JOIN themes t ON pt.theme_id = t.id WHERE pt.projet_id=?', (self.projet_id,))
