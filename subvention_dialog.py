@@ -66,7 +66,7 @@ class SubventionDialog(QDialog):
         self.cd_spin.setSingleStep(0.01)  # Pas de 0.01
         layout.addRow('Cd :', self.cd_spin)
         self.taux_spin = QDoubleSpinBox()
-        self.taux_spin.setValue(100)  # Valeur par défaut à 50%
+        self.taux_spin.setValue(round(100, 2))  # Valeur par défaut arrondie à 2 décimales
         self.taux_spin.setDecimals(2)
         self.taux_spin.setRange(0, 100)
         self.taux_spin.setSuffix('%')
@@ -77,18 +77,40 @@ class SubventionDialog(QDialog):
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addRow(separator)
-        
+
+        montant_layout = QVBoxLayout()
+
         self.montant_label = QLabel("0 €")
         self.montant_label.setStyleSheet("font-weight: bold; font-size: 14px; color: green;")
-        layout.addRow("Montant estimé de la subvention:", self.montant_label)
+        montant_layout.addWidget(QLabel("Montant estimé de la subvention:"))
+        montant_layout.addWidget(self.montant_label)
+
+        self.assiette_label = QLabel("0 €")
+        self.assiette_label.setStyleSheet("font-weight: bold; font-size: 14px; color: blue;")
+        montant_layout.addWidget(QLabel("Assiette éligible:"))
+        montant_layout.addWidget(self.assiette_label)
+
+        layout.addRow(montant_layout)
         
-        # Champ montant maximal supposé
-        self.max_montant_spin = QDoubleSpinBox()
-        self.max_montant_spin.setDecimals(2)
-        self.max_montant_spin.setRange(0, 1_000_000_000)
-        self.max_montant_spin.setSingleStep(100)
-        self.max_montant_spin.setValue(0)
-        layout.addRow('Montant maximal (€):', self.max_montant_spin)
+        # Nouvelle section pour les champs numériques
+        separator_bottom = QFrame()
+        separator_bottom.setFrameShape(QFrame.Shape.HLine)
+        separator_bottom.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addRow(separator_bottom)
+
+        self.depenses_max_spin = QDoubleSpinBox()
+        self.depenses_max_spin.setDecimals(2)
+        self.depenses_max_spin.setRange(0, 1_000_000_000)
+        self.depenses_max_spin.setSingleStep(100)
+        self.depenses_max_spin.setValue(0)
+        layout.addRow('Dépenses éligibles max (€):', self.depenses_max_spin)
+
+        self.subvention_max_spin = QDoubleSpinBox()
+        self.subvention_max_spin.setDecimals(2)
+        self.subvention_max_spin.setRange(0, 1_000_000_000)
+        self.subvention_max_spin.setSingleStep(100)
+        self.subvention_max_spin.setValue(0)
+        layout.addRow('Montant subvention max (€):', self.subvention_max_spin)
         
         # Boutons
         btns = QHBoxLayout()
@@ -113,13 +135,26 @@ class SubventionDialog(QDialog):
         self.cd_spin.valueChanged.connect(self.update_montant)
         self.taux_spin.valueChanged.connect(self.update_montant)
         
+        # Mettre à jour l'assiette éligible lors des changements
+        self.cb_temps.stateChanged.connect(self.update_assiette)
+        self.spin_temps.valueChanged.connect(self.update_assiette)
+        self.cb_externes.stateChanged.connect(self.update_assiette)
+        self.spin_externes.valueChanged.connect(self.update_assiette)
+        self.cb_autres.stateChanged.connect(self.update_assiette)
+        self.spin_autres.valueChanged.connect(self.update_assiette)
+        self.cb_dotation.stateChanged.connect(self.update_assiette)
+        self.spin_dotation.valueChanged.connect(self.update_assiette)
+        self.cd_spin.valueChanged.connect(self.update_assiette)
+
         # Charger les données si modification
         if data:
             self.load_data(data)
             
         # Calculer le montant initial
         self.update_montant()
-        
+        # Calculer l'assiette initiale après l'initialisation
+        self.update_assiette()
+
     def get_project_data(self):
         """Récupère les données du projet pour calculer le montant de la subvention"""
         if not self.projet_id:
@@ -349,6 +384,19 @@ class SubventionDialog(QDialog):
         # Ajouter une infobulle pour voir le détail du calcul
         self.montant_label.setToolTip(detail_text)
         
+    def update_assiette(self):
+        """Met à jour l'assiette éligible sans multiplier par le taux de subvention."""
+        assiette = 0
+        if self.cb_temps.isChecked():
+            assiette += self.spin_temps.value() * self.get_project_data()['temps_travail_total']
+        if self.cb_externes.isChecked():
+            assiette += self.spin_externes.value() * self.get_project_data()['depenses_externes']
+        if self.cb_autres.isChecked():
+            assiette += self.spin_autres.value() * self.get_project_data()['autres_achats']
+        if self.cb_dotation.isChecked():
+            assiette += self.spin_dotation.value() * self.get_project_data()['amortissements']
+        self.assiette_label.setText(f"{assiette:,.2f} €")
+        
     def validate_and_accept(self):
         # Vérifier que le nom est renseigné
         nom = self.nom_edit.text().strip()
@@ -378,7 +426,8 @@ class SubventionDialog(QDialog):
             'coef_dotation_amortissements': float(self.spin_dotation.value()),
             'cd': float(self.cd_spin.value()),
             'taux': float(self.taux_spin.value()),
-            'montant_maximal': float(self.max_montant_spin.value())
+            'depenses_eligibles_max': float(self.depenses_max_spin.value()),
+            'montant_subvention_max': float(self.subvention_max_spin.value())
         }
     def load_data(self, data):
         self.nom_edit.setText(data.get('nom', ''))
@@ -391,5 +440,6 @@ class SubventionDialog(QDialog):
         self.cb_dotation.setChecked(bool(data.get('depenses_dotation_amortissements', 0)))
         self.spin_dotation.setValue(float(data.get('coef_dotation_amortissements', 1)))
         self.cd_spin.setValue(float(data.get('cd', 1)))
-        self.taux_spin.setValue(float(data.get('taux', 50)))
-        self.max_montant_spin.setValue(float(data.get('montant_maximal', 0)))
+        self.taux_spin.setValue(round(float(data.get('taux', 100)), 2))  # Arrondi explicite
+        self.depenses_max_spin.setValue(float(data.get('depenses_eligibles_max', 0)))
+        self.subvention_max_spin.setValue(float(data.get('montant_subvention_max', 0)))

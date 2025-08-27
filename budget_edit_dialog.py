@@ -147,14 +147,14 @@ class BudgetEditDialog(QDialog):
         # --- Boutons en haut ---
         btn_layout = QHBoxLayout()
         self.btn_temps = QPushButton("Temps de travail")
-        self.btn_recettes = QPushButton("Recettes")
         self.btn_depenses = QPushButton("Dépenses externes")
         self.btn_autres_depenses = QPushButton("Autres dépenses")
+        self.btn_recettes = QPushButton("Recettes")
         self.btns = [self.btn_temps, self.btn_recettes, self.btn_depenses, self.btn_autres_depenses]
         btn_layout.addWidget(self.btn_temps)
-        btn_layout.addWidget(self.btn_recettes)
         btn_layout.addWidget(self.btn_depenses)
         btn_layout.addWidget(self.btn_autres_depenses)
+        btn_layout.addWidget(self.btn_recettes)
 
         # Ajout du surlignage et des connexions dans le constructeur
         def update_button_styles(active_idx):
@@ -929,6 +929,7 @@ class BudgetEditDialog(QDialog):
         self.btn_temps.clicked.connect(lambda: (self.stacked.setCurrentIndex(0), self.update_button_styles(0)))
         self.btn_recettes.clicked.connect(lambda: (self.stacked.setCurrentIndex(1), self.update_button_styles(1)))
         self.btn_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(2), self.update_button_styles(2)))
+        self.btn_autres_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(3), self.update_button_styles(3)))
     # Surligne le bouton actif au démarrage
         self.update_button_styles(0)
 
