@@ -4,6 +4,29 @@ import sqlite3
 DB_PATH = 'gestion_budget.db'
 
 class TaskManagerDialog(QDialog):
+    def repartir_budget_automatiquement(self):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, pourcentage_budget FROM taches WHERE projet_id=?', (self.projet_id,))
+        rows = cursor.fetchall()
+        total = sum([row[1] for row in rows if row[1] > 0])
+        zeros = [row[0] for row in rows if row[1] == 0]
+        reste = 100 - total
+        if zeros and reste > 0:
+            if len(zeros) == 1:
+                cursor.execute('UPDATE taches SET pourcentage_budget=? WHERE id=?', (reste, zeros[0]))
+            else:
+                part = round(reste / len(zeros), 2)
+                for i, task_id in enumerate(zeros):
+                    # Pour la dernière tâche, ajuste pour arriver à 100% pile
+                    if i == len(zeros) - 1:
+                        part_finale = round(100 - (total + part * (len(zeros) - 1)), 2)
+                        cursor.execute('UPDATE taches SET pourcentage_budget=? WHERE id=?', (part_finale, task_id))
+                    else:
+                        cursor.execute('UPDATE taches SET pourcentage_budget=? WHERE id=?', (part, task_id))
+            conn.commit()
+        conn.close()
+        self.load_tasks()
     def __init__(self, parent, projet_id):
         super().__init__(parent)
         self.setWindowTitle('Gestion des tâches du projet')
@@ -54,6 +77,13 @@ class TaskManagerDialog(QDialog):
             self.table.setItem(row_idx, 4, QTableWidgetItem(str(pourcentage_budget) if pourcentage_budget is not None else ""))
             self.task_ids.append(id_)
         conn.close()
+    def get_total_pourcentage_budget(self):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('SELECT SUM(pourcentage_budget) FROM taches WHERE projet_id=?', (self.projet_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result[0] is not None else 0
 
     def add_task(self):
         dialog = AddTaskDialog(self)
@@ -64,15 +94,28 @@ class TaskManagerDialog(QDialog):
             date_fin = parse_date_fr(data["date_fin"])
             details = data["details"]
             pourcentage_budget = data["pourcentage_budget"]
-            if pourcentage_budget == 0:
-                pourcentage_budget = self.calculer_pourcentage_budget(date_debut, date_fin)
+            total = self.get_total_pourcentage_budget()
+            if total + pourcentage_budget > 100:
+                QMessageBox.warning(self, "Erreur budget", "La somme des pourcentages du budget dépasse 100%. Veuillez ajuster la répartition.")
+                return
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute('INSERT INTO taches (projet_id, nom, date_debut, date_fin, details, pourcentage_budget) VALUES (?, ?, ?, ?, ?, ?)',
-                           (self.projet_id, nom, data["date_debut"], data["date_fin"], details, pourcentage_budget))
+                           (self.projet_id, nom, date_debut, date_fin, details, pourcentage_budget))
             conn.commit()
             conn.close()
-            self.load_tasks()
+            self.repartir_budget_automatiquement()
+
+    def closeEvent(self, event):
+        total = self.get_total_pourcentage_budget()
+        if total is None or total == 0:
+            # Permet de quitter si aucune tâche n'existe
+            event.accept()
+        elif total < 100:
+            QMessageBox.warning(self, "Erreur budget", "La somme des pourcentages du budget n'atteint pas 100%. Veuillez compléter la répartition avant de quitter.")
+            event.ignore()
+        else:
+            event.accept()
 
     def delete_task(self):
         idx = self.table.currentRow()
@@ -115,8 +158,6 @@ class TaskManagerDialog(QDialog):
             date_fin = parse_date_fr(data["date_fin"])
             details = data["details"]
             pourcentage_budget = data["pourcentage_budget"]
-            if pourcentage_budget == 0:
-                pourcentage_budget = self.calculer_pourcentage_budget(date_debut, date_fin)
             task_id = self.task_ids[idx]
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -124,7 +165,7 @@ class TaskManagerDialog(QDialog):
                            (nom, data["date_debut"], data["date_fin"], details, pourcentage_budget, task_id))
             conn.commit()
             conn.close()
-            self.load_tasks()
+            self.repartir_budget_automatiquement()
 
     def calculer_pourcentage_budget(self, date_debut, date_fin):
         # date_debut et date_fin sont au format YYYY-MM-DD
@@ -185,11 +226,12 @@ class AddTaskDialog(QDialog):
         self.pourcentage_edit.setRange(0, 100)
         self.pourcentage_edit.setDecimals(2)
         self.pourcentage_edit.setSuffix(" %")
-        if pourcentage_budget:
-            try:
-                self.pourcentage_edit.setValue(float(pourcentage_budget))
-            except Exception:
-                self.pourcentage_edit.setValue(0)
+        # Si le champ n'est pas renseigné, on met 0 par défaut
+        try:
+            val = float(pourcentage_budget)
+        except Exception:
+            val = 0
+        self.pourcentage_edit.setValue(val)
         layout.addWidget(self.pourcentage_edit)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         layout.addWidget(buttons)
