@@ -474,6 +474,9 @@ class ProjectForm(QDialog):
         self.livrables_edit.textChanged.connect(self.check_form_valid)
         self.chef_combo.currentIndexChanged.connect(self.check_form_valid)
         self.theme_listwidget.itemSelectionChanged.connect(self.check_form_valid)
+        # Ajout des contrôles pour les dates
+        self.date_debut.dateChanged.connect(self.check_form_valid)
+        self.date_fin.dateChanged.connect(self.check_form_valid)
         self.check_form_valid()
         # Charger les données du projet si modification
         if self.projet_id:
@@ -538,7 +541,19 @@ class ProjectForm(QDialog):
         nom_ok = bool(self.nom_edit.text().strip())
         debut_ok = bool(self.date_debut.text().strip())
         fin_ok = bool(self.date_fin.text().strip())
-        self.btn_ok.setEnabled(code_ok and nom_ok and debut_ok and fin_ok)
+
+        # Vérification que la date de début est antérieure ou égale à la date de fin
+        dates_ok = self.date_debut.date() <= self.date_fin.date()
+
+        # Feedback visuel pour les dates invalides
+        if not dates_ok:
+            self.date_debut.setStyleSheet("border: 2px solid red;")
+            self.date_fin.setStyleSheet("border: 2px solid red;")
+        else:
+            self.date_debut.setStyleSheet("")
+            self.date_fin.setStyleSheet("")
+
+        self.btn_ok.setEnabled(code_ok and nom_ok and debut_ok and fin_ok and dates_ok)
 
     def invest_context_menu(self, pos):
         item = self.invest_list.itemAt(pos)
