@@ -202,8 +202,8 @@ class ProjectDetailsDialog(QDialog):
         self.setLayout(main_layout)
 
     def handle_import_excel(self):
-        from import_manager_dialog import ImportManagerDialog
-        dlg = ImportManagerDialog(self, self.projet_id)
+        from excel_import import ExcelImportDialog
+        dlg = ExcelImportDialog(self.projet_id, self)
         dlg.exec()
 
     def load_actualites(self):

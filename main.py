@@ -915,6 +915,11 @@ class ProjectForm(QDialog):
             item.setText(subv_str)
 
     def save_project(self):
+        # Sauvegarder les valeurs de la direction courante avant la sauvegarde
+        if hasattr(self, '_current_direction') and self._current_direction is not None:
+            for label in self.equipe_types_labels:
+                self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         theme_principal = self.theme_principal_combo.currentText()  # Récupère le thème principal
@@ -986,6 +991,15 @@ class ProjectForm(QDialog):
                 print(f"Erreur lors de la sauvegarde de l'investissement: {e}")
                 # Continue avec les autres investissements
                 continue
+        
+        # Sauvegarde des données d'équipe
+        cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
+        for direction, types_data in self.equipe_data.items():
+            for type_, nombre in types_data.items():
+                if nombre > 0:  # Ne sauvegarder que les membres avec un nombre > 0
+                    cursor.execute('''INSERT INTO equipe (projet_id, direction, type, nombre) 
+                                      VALUES (?, ?, ?, ?)''',
+                                  (projet_id, direction, type_, nombre))
                 
         conn.commit()
         conn.close()
