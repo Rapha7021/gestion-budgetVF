@@ -142,17 +142,44 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, 'Erreur', 'Projet introuvable.')
             return
         pid = res[0]
+        
+        # Confirmation simple
+        message_confirmation = f'Voulez-vous vraiment supprimer le projet {code} ?'
+            
         confirm = QMessageBox.question(
-            self, 'Confirmation', f'Voulez-vous vraiment supprimer le projet {code} ?',
+            self, 'Confirmation', message_confirmation,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+        
         if confirm == QMessageBox.StandardButton.Yes:
-            cursor.execute('DELETE FROM projets WHERE id=?', (pid,))
-            conn.commit()
-            conn.close()
-            self.load_projects()
-        else:
-            conn.close()
+            try:
+                # Supprimer dans l'ordre pour éviter les contraintes
+                tables_a_supprimer = [
+                    'recettes', 'depenses', 'autres_depenses', 'temps_travail',
+                    'taches', 'actualites', 'images', 'investissements', 
+                    'subventions', 'equipe', 'projet_themes', 'amortissements'
+                ]
+                
+                for table in tables_a_supprimer:
+                    try:
+                        cursor.execute(f'DELETE FROM {table} WHERE projet_id=?', (pid,))
+                    except sqlite3.Error as e:
+                        print(f"Erreur suppression {table}: {e}")
+                        # Continue même en cas d'erreur sur une table
+                        
+                # Finalement supprimer le projet
+                cursor.execute('DELETE FROM projets WHERE id=?', (pid,))
+                conn.commit()
+                
+                QMessageBox.information(self, 'Succès', f'Projet {code} et toutes ses données associées ont été supprimés.')
+                self.load_projects()
+                
+            except sqlite3.Error as e:
+                conn.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {e}')
+        
+        conn.close()
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle('Gestion de Budget - Menu Principal')
