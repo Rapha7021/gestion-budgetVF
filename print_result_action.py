@@ -135,7 +135,7 @@ class PrintConfigDialog(QDialog):
         self.cost_type_group.addButton(self.radio_cout_complet)
 
         # Coût de production par défaut
-        self.radio_cout_production.setChecked(True)
+        self.radio_montant_charge.setChecked(True)
 
         cost_type_layout.addWidget(self.radio_montant_charge)
         cost_type_layout.addWidget(self.radio_cout_production)

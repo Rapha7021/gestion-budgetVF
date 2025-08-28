@@ -22,11 +22,36 @@ class CompteResultatDisplay(QDialog):
         self.granularity = config_data.get('granularity', 'yearly')  # 'yearly' ou 'monthly'
         self.cost_type = config_data.get('cost_type', 'cout_production')  # Type de coût sélectionné
         
+        # Vérifier si au moins un projet a le CIR activé
+        self.has_cir_projects = self.check_cir_projects()
+        
         self.setWindowTitle("Compte de Résultat")
         self.setMinimumSize(1000, 700)
         
         self.init_ui()
         self.load_data()
+    
+    def check_cir_projects(self):
+        """Vérifie si au moins un projet a le CIR activé"""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Récupérer les projets avec CIR activé
+            placeholders = ','.join(['?'] * len(self.project_ids))
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM projets 
+                WHERE id IN ({placeholders}) AND cir = 1
+            """, self.project_ids)
+            
+            count = cursor.fetchone()[0] or 0
+            return count > 0
+            
+        except sqlite3.OperationalError:
+            # Table n'existe pas ou colonne CIR manquante
+            return False
+        finally:
+            conn.close()
     
     def init_ui(self):
         """Initialise l'interface utilisateur"""
@@ -249,11 +274,12 @@ class CompteResultatDisplay(QDialog):
     
     def collect_period_data(self, cursor, year, month=None):
         """Collecte les données pour une période spécifique"""
-        # Conditions de filtrage
+        # Conditions de filtrage et définition des noms de mois
+        month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                      "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+        
         if month:
             # Filtrage mensuel - utilise les noms de mois français
-            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
             month_condition = f"AND mois = '{month_names[month-1]}'"
             year_condition = f"AND annee = {year}"
         else:
@@ -394,23 +420,22 @@ class CompteResultatDisplay(QDialog):
         except sqlite3.OperationalError:
             data['dotation_amortissements'] = 0
         
-        # 7. CRÉDIT D'IMPÔT RECHERCHE (CIR) - Calculé selon les coefficients
+        # 7. CRÉDIT D'IMPÔT RECHERCHE (CIR) - Calculé sur l'ensemble du projet puis réparti
         try:
-            # Récupérer les coefficients CIR pour l'année
-            cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (year,))
-            cir_coeffs = cursor.fetchone()
+            data['credit_impot'] = 0
             
-            if cir_coeffs:
-                k1, k2, k3 = cir_coeffs
-                # CIR = ((Coût_direct × K1 + Amortissements × K2) - Subventions) × K3
-                cir_base = (data['cout_direct'] * (k1 or 0)) + (data['dotation_amortissements'] * (k2 or 0))
-                cir_assiette = cir_base - data['subventions']  # Soustraire les subventions
-                cir_credit = cir_assiette * (k3 or 0)
-                # Le crédit d'impôt est négatif (diminue les charges)
-                data['credit_impot'] = -abs(cir_credit) if cir_credit > 0 else 0
-            else:
-                data['credit_impot'] = 0
-        except sqlite3.OperationalError:
+            if self.has_cir_projects:
+                # Calculer le CIR total du projet et le répartir par année
+                cir_annuel = self.calculate_distributed_cir(cursor, year, month)
+                data['credit_impot'] = cir_annuel
+                
+        except sqlite3.OperationalError as e:
+            # Erreur avec les tables - message d'alerte mais continuer
+            if not hasattr(self, '_cir_error_shown'):
+                QMessageBox.warning(self.parent, "Erreur CIR", 
+                                  f"Erreur lors du calcul du CIR : {str(e)}\n"
+                                  f"Le calcul du CIR sera ignoré.")
+                self._cir_error_shown = True
             data['credit_impot'] = 0
         
         return data
@@ -424,25 +449,157 @@ class CompteResultatDisplay(QDialog):
         }
         return cost_type_mapping.get(self.cost_type, 'Coût direct')
 
+    def calculate_distributed_cir(self, cursor, target_year, target_month=None):
+        """Calcule le CIR total du projet et le répartit proportionnellement par année"""
+        try:
+            # Récupérer les projets CIR
+            cir_project_ids = []
+            for project_id in self.project_ids:
+                cursor.execute("SELECT cir FROM projets WHERE id = ? AND cir = 1", (project_id,))
+                if cursor.fetchone():
+                    cir_project_ids.append(project_id)
+            
+            if not cir_project_ids:
+                return 0
+            
+            # 1. Calculer les totaux sur toutes les années du projet
+            total_montant_charge = 0
+            total_amortissements = 0
+            total_subventions = 0
+            
+            # Calculer les coûts de l'année cible pour la répartition
+            target_year_costs = 0
+            
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            for year in self.years:
+                # Montant chargé pour cette année
+                year_montant_charge = 0
+                cir_project_condition = f"AND tt.projet_id IN ({','.join(['?'] * len(cir_project_ids))})"
+                
+                query = f"""
+                    SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
+                    FROM temps_travail tt
+                    JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
+                    WHERE tt.annee = {year} {cir_project_condition}
+                """
+                cursor.execute(query, cir_project_ids)
+                year_montant_charge = cursor.fetchone()[0] or 0
+                total_montant_charge += year_montant_charge
+                
+                # Si c'est l'année cible, stocker les coûts pour la répartition
+                if year == target_year:
+                    if target_month:
+                        # Pour un mois spécifique, recalculer avec le filtre mensuel
+                        query_month = f"""
+                            SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
+                            FROM temps_travail tt
+                            JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
+                            WHERE tt.annee = {year} AND tt.mois = '{month_names[target_month-1]}' {cir_project_condition}
+                        """
+                        cursor.execute(query_month, cir_project_ids)
+                        target_year_costs = cursor.fetchone()[0] or 0
+                    else:
+                        target_year_costs = year_montant_charge
+                
+                # Amortissements pour cette année
+                year_amort = 0
+                for project_id in cir_project_ids:
+                    amort = self.calculate_amortissement_for_period(cursor, project_id, year)
+                    year_amort += amort
+                total_amortissements += year_amort
+                
+                # Subventions pour cette année
+                year_subvention = 0
+                for project_id in cir_project_ids:
+                    cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+                    projet_info = cursor.fetchone()
+                    if projet_info:
+                        subv = self.calculate_simple_distributed_subvention(
+                            cursor, project_id, year, None, projet_info)
+                        year_subvention += subv
+                total_subventions += year_subvention
+            
+            # 2. Utiliser les coefficients de la première année disponible
+            k1, k2, k3 = None, None, None
+            for year in sorted(self.years):
+                cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (year,))
+                cir_coeffs = cursor.fetchone()
+                if cir_coeffs:
+                    k1, k2, k3 = cir_coeffs
+                    break
+            
+            if not k1:
+                if not hasattr(self, '_cir_warning_shown'):
+                    QMessageBox.warning(self.parent, "Avertissement CIR", 
+                                      f"Aucun coefficient CIR trouvé pour les années {self.years}.\n"
+                                      f"Le calcul du CIR sera ignoré.")
+                    self._cir_warning_shown = True
+                return 0
+            
+            # 3. Calculer le CIR total du projet
+            montant_eligible_total = (total_montant_charge * k1) + (total_amortissements * k2)
+            montant_net_eligible_total = montant_eligible_total - total_subventions
+            cir_total = montant_net_eligible_total * k3
+            
+            # 4. Répartir proportionnellement
+            if total_montant_charge > 0:
+                proportion = (target_year_costs / total_montant_charge) if total_montant_charge > 0 else 0
+                
+                if target_month:
+                    # Pour un mois : proportionnel au mois
+                    cir_reparti = cir_total * proportion
+                else:
+                    # Pour une année : proportionnel à l'année
+                    cir_reparti = cir_total * proportion
+                
+                # Le crédit d'impôt est négatif (diminue les charges)
+                # Si le CIR calculé est positif, on le rend négatif pour diminuer les charges
+                # Si le CIR calculé est négatif (cas où subventions > montant éligible), on retourne 0
+                if cir_reparti > 0:
+                    result = -abs(cir_reparti)
+                elif cir_reparti < 0:
+                    # Dans ce cas, les subventions dépassent le montant éligible, pas de CIR
+                    result = 0
+                else:
+                    result = 0
+                    
+                return result
+            else:
+                return 0
+                
+        except Exception as e:
+            print(f"Erreur dans calculate_distributed_cir: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+
     def populate_table(self, data):
         """Remplit le tableau avec les données"""
         # Structure du compte de résultat selon vos spécifications
         structure = [
-            ("=== PRODUITS ===", "header"),
+            ("PRODUITS", "header"),
             ("Recettes", "recettes"),
             ("Subventions", "subventions"),
             ("TOTAL PRODUITS", "total_produits"),
-            ("", "separator"),
-            ("=== CHARGES ===", "header"),
+            ("CHARGES", "header"),
             ("Achats et sous-traitance", "achats_sous_traitance"),
             ("Autres achats", "autres_achats"),
             (self.get_cost_type_label(), "cout_direct"),  # Nom dynamique selon le type de coût
             ("Dotation aux amortissements", "dotation_amortissements"),
-            ("Crédit d'impôt (négatif)", "credit_impot"),
+            ("CHARGES EXCEPTIONNELLES", "header"),
+        ]
+        
+        # Ajouter la ligne CIR seulement si au moins un projet a le CIR activé
+        if self.has_cir_projects:
+            structure.append(("Crédit d'impôt", "credit_impot"))
+        
+        structure.extend([
             ("TOTAL CHARGES", "total_charges"),
             ("", "separator"),
             ("RÉSULTAT FINANCIER", "resultat_financier")
-        ]
+        ])
         
         self.table.setRowCount(len(structure))
         
@@ -498,9 +655,6 @@ class CompteResultatDisplay(QDialog):
                 else:
                     # Données simples
                     value = data[period].get(data_key, 0)
-                    if data_key == "credit_impot":
-                        # Crédit d'impôt négatif - à implémenter selon vos besoins
-                        value = 0  # Pour l'instant
                     
                     item = QTableWidgetItem(f"{value:,.2f}" if value != 0 else "")
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -533,11 +687,16 @@ class CompteResultatDisplay(QDialog):
         if total_type == "total_produits":
             return period_data.get('recettes', 0) + period_data.get('subventions', 0)
         elif total_type == "total_charges":
-            return (period_data.get('achats_sous_traitance', 0) + 
-                   period_data.get('autres_achats', 0) + 
-                   period_data.get('cout_direct', 0) + 
-                   period_data.get('dotation_amortissements', 0) + 
-                   period_data.get('credit_impot', 0))  # Crédit d'impôt inclus dans les charges
+            total_charges = (period_data.get('achats_sous_traitance', 0) + 
+                           period_data.get('autres_achats', 0) + 
+                           period_data.get('cout_direct', 0) + 
+                           period_data.get('dotation_amortissements', 0))
+            
+            # Ajouter le crédit d'impôt seulement si au moins un projet a le CIR activé
+            if self.has_cir_projects:
+                total_charges += period_data.get('credit_impot', 0)
+                
+            return total_charges
         elif total_type == "resultat_financier":
             total_produits = self.calculate_total(period_data, "total_produits")
             total_charges = self.calculate_total(period_data, "total_charges")
