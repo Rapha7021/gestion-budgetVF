@@ -382,22 +382,15 @@ class CompteResultatDisplay(QDialog):
         
         # 6. DOTATION AUX AMORTISSEMENTS
         try:
-            if month:
-                # Pour un mois spécifique, prendre 1/12 de l'amortissement annuel
-                query = f"""
-                    SELECT COALESCE(SUM(montant / duree / 12), 0) FROM investissements 
-                    WHERE strftime('%Y', date_achat) = '{year}' 
-                    AND projet_id IN ({','.join(['?'] * len(self.project_ids))})
-                """
-            else:
-                # Pour une année complète
-                query = f"""
-                    SELECT COALESCE(SUM(montant / duree), 0) FROM investissements 
-                    WHERE strftime('%Y', date_achat) = '{year}' 
-                    AND projet_id IN ({','.join(['?'] * len(self.project_ids))})
-                """
-            cursor.execute(query, self.project_ids)
-            data['dotation_amortissements'] = cursor.fetchone()[0] or 0
+            amortissements_total = 0
+            
+            # Calculer les amortissements pour chaque projet
+            for project_id in self.project_ids:
+                amortissement_projet = self.calculate_amortissement_for_period(
+                    cursor, project_id, year, month)
+                amortissements_total += amortissement_projet
+            
+            data['dotation_amortissements'] = amortissements_total
         except sqlite3.OperationalError:
             data['dotation_amortissements'] = 0
         
@@ -916,6 +909,86 @@ class CompteResultatDisplay(QDialog):
             print(f"Erreur dans calculate_amortissements_total_subvention_style: {e}")
             return 0
     
+    
+    def calculate_amortissement_for_period(self, cursor, project_id, year, month=None):
+        """
+        Calcule les amortissements pour une période donnée selon la règle :
+        - Amortissement mensuel = montant total / (durée amortissement × 12)
+        - Début d'amortissement = mois suivant le mois d'achat
+        """
+        import datetime
+        
+        try:
+            # Récupérer tous les investissements du projet
+            cursor.execute('''
+                SELECT montant, date_achat, duree 
+                FROM investissements 
+                WHERE projet_id = ?
+            ''', (project_id,))
+            
+            amortissements_total = 0
+            
+            for montant_inv, date_achat, duree in cursor.fetchall():
+                try:
+                    # Convertir la date d'achat (format 'MM/YYYY')
+                    achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
+                    
+                    # Calculer l'amortissement mensuel
+                    amortissement_mensuel = float(montant_inv) / (int(duree) * 12)
+                    
+                    # Le premier mois d'amortissement = mois suivant l'achat
+                    if achat_date.month == 12:
+                        premier_mois_amort = datetime.datetime(achat_date.year + 1, 1, 1)
+                    else:
+                        premier_mois_amort = datetime.datetime(achat_date.year, achat_date.month + 1, 1)
+                    
+                    # Le dernier mois d'amortissement
+                    mois_restants = int(duree) * 12
+                    dernier_mois_amort = premier_mois_amort
+                    for _ in range(mois_restants - 1):
+                        if dernier_mois_amort.month == 12:
+                            dernier_mois_amort = datetime.datetime(dernier_mois_amort.year + 1, 1, 1)
+                        else:
+                            dernier_mois_amort = datetime.datetime(dernier_mois_amort.year, dernier_mois_amort.month + 1, 1)
+                    
+                    if month:
+                        # Calcul pour un mois spécifique
+                        mois_demande = datetime.datetime(year, month, 1)
+                        
+                        # Vérifier si ce mois tombe dans la période d'amortissement
+                        if premier_mois_amort <= mois_demande <= dernier_mois_amort:
+                            amortissements_total += amortissement_mensuel
+                    
+                    else:
+                        # Calcul pour une année complète
+                        debut_annee = datetime.datetime(year, 1, 1)
+                        fin_annee = datetime.datetime(year, 12, 1)
+                        
+                        # Compter les mois d'amortissement qui tombent dans cette année
+                        mois_amort_annee = 0
+                        mois_courant = premier_mois_amort
+                        
+                        while mois_courant <= dernier_mois_amort:
+                            if debut_annee <= mois_courant <= fin_annee:
+                                mois_amort_annee += 1
+                            
+                            # Passer au mois suivant
+                            if mois_courant.month == 12:
+                                mois_courant = datetime.datetime(mois_courant.year + 1, 1, 1)
+                            else:
+                                mois_courant = datetime.datetime(mois_courant.year, mois_courant.month + 1, 1)
+                        
+                        amortissements_total += amortissement_mensuel * mois_amort_annee
+                
+                except (ValueError, TypeError) as e:
+                    print(f"Erreur lors du traitement de l'investissement {montant_inv}: {e}")
+                    continue
+            
+            return amortissements_total
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_amortissement_for_period: {e}")
+            return 0
     
     def calculate_amortissement_for_year(self, cursor, project_id, year, month, projet_info):
         """Calcule les amortissements pour une année donnée"""

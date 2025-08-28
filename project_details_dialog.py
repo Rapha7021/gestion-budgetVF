@@ -172,11 +172,9 @@ class ProjectDetailsDialog(QDialog):
         btn_hbox.addWidget(add_btn)
         btn_hbox.addWidget(edit_btn)
         btn_hbox.addWidget(del_btn)
-        # Boutons import Excel et impression budget
+        # Bouton import Excel
         import_excel_btn = QPushButton("Importer Excel")
-        print_result_btn = QPushButton("Imprimer le budget")
         btn_hbox.addWidget(import_excel_btn)
-        btn_hbox.addWidget(print_result_btn)
         # Nouveau bouton "Modifier le budget"
         edit_budget_btn = QPushButton("Modifier le budget")
         btn_hbox.addWidget(edit_budget_btn)
@@ -191,10 +189,9 @@ class ProjectDetailsDialog(QDialog):
         add_btn.clicked.connect(self.add_actualite)
         edit_btn.clicked.connect(self.edit_actualite)
         del_btn.clicked.connect(self.delete_actualite)
-        # Import Excel et impression résultat
+        # Import Excel
         self.df_long = None
         import_excel_btn.clicked.connect(self.handle_import_excel)
-        print_result_btn.clicked.connect(self.handle_print_result)
         # Connexion du bouton "Modifier le budget"
         edit_budget_btn.clicked.connect(self.edit_budget)
         # Connexion du bouton "Gérer les tâches"
@@ -209,9 +206,6 @@ class ProjectDetailsDialog(QDialog):
         dlg = ImportManagerDialog(self, self.projet_id)
         dlg.exec()
 
-    def handle_print_result(self):
-        from print_result_action import show_print_config_dialog
-        show_print_config_dialog(self, self.projet_id)
     def load_actualites(self):
         self.actualites_list.clear()
         conn = sqlite3.connect(DB_PATH)

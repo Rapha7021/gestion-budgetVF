@@ -196,13 +196,32 @@ class MainWindow(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        
+        # Zone principale avec tableau et bouton impression à droite
+        main_area = QHBoxLayout()
+        
+        # Tableau des projets
         from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem
         self.project_table = QTableWidget()
         self.project_table.setColumnCount(4)
         self.project_table.setHorizontalHeaderLabels(['Code projet', 'Nom projet', 'Chef de projet', 'Etat'])
         self.project_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.project_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        layout.addWidget(self.project_table)
+        main_area.addWidget(self.project_table)
+        
+        # Zone droite avec le bouton "Imprimer le budget" centré verticalement
+        right_area = QVBoxLayout()
+        right_area.addStretch()  # Espace au-dessus pour centrer
+        self.btn_print_budget = QPushButton('Imprimer le budget')
+        self.btn_print_budget.setMinimumHeight(60)  # Plus gros
+        self.btn_print_budget.setMinimumWidth(150)
+        self.btn_print_budget.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; }")
+        right_area.addWidget(self.btn_print_budget)
+        right_area.addStretch()  # Espace en dessous pour centrer
+        
+        main_area.addLayout(right_area)
+        layout.addLayout(main_area)
+        # Boutons de gestion en bas
         btn_layout = QHBoxLayout()
         self.btn_new = QPushButton('Nouveau projet')
         self.btn_edit = QPushButton('Modifier le projet sélectionné')
@@ -232,6 +251,7 @@ class MainWindow(QWidget):
         self.project_table.cellDoubleClicked.connect(self.show_project_details)
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
         self.btn_cir.clicked.connect(self.open_cir_dialog)
+        self.btn_print_budget.clicked.connect(self.handle_print_budget)
         self.btn_directions.clicked.connect(self.open_direction_manager)
         self.btn_project_managers.clicked.connect(self.open_project_manager_dialog)
 
@@ -281,6 +301,11 @@ class MainWindow(QWidget):
         from project_manager_dialog import ProjectManagerDialog
         dialog = ProjectManagerDialog()
         dialog.exec()
+
+    def handle_print_budget(self):
+        """Ouvrir le dialogue d'impression de budget avec sélection de projet"""
+        from print_result_action import show_print_config_dialog
+        show_print_config_dialog(self, None)
 
     def show_project_details(self, row, column):
         code = self.project_table.item(row, 0).text()
@@ -599,29 +624,85 @@ class ProjectForm(QDialog):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
-                    self.invest_list.takeItem(self.invest_list.row(item))
+                    row = self.invest_list.row(item)
+                    
+                    # Si le projet existe déjà, supprimer de la base
+                    if self.projet_id:
+                        # Parse l'investissement pour obtenir ses données
+                        invest_text = item.text()
+                        try:
+                            if 'Nom: ' in invest_text:
+                                nom = invest_text.split('Nom: ')[1].split(',')[0].strip()
+                                montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                                date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                                duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                            else:
+                                # Format ancien sans nom
+                                nom = ""
+                                montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                                date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                                duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                            
+                            # Suppression de la base de données en cherchant par les données de l'investissement
+                            conn = sqlite3.connect(DB_PATH)
+                            cursor = conn.cursor()
+                            cursor.execute('''DELETE FROM investissements 
+                                            WHERE projet_id=? AND nom=? AND montant=? AND date_achat=? AND duree=? 
+                                            LIMIT 1''',
+                                          (self.projet_id, nom, montant, date_achat, duree))
+                            conn.commit()
+                            conn.close()
+                        except Exception as e:
+                            print(f"Erreur lors de la suppression de l'investissement: {e}")
+                    
+                    # Supprimer de l'interface
+                    self.invest_list.takeItem(row)
         # Si clic droit sur une zone vide, rien ne se passe
 
     def edit_invest(self, item):
         # Parse l'investissement existant
         txt = item.text()
+        old_nom, old_montant, old_date_achat, old_duree = '', '', '', ''
         try:
             if 'Nom: ' in txt:
-                nom = txt.split('Nom: ')[1].split(',')[0].strip()
-                montant = txt.split('Montant: ')[1].split(' €')[0]
-                date_achat = txt.split('Date achat: ')[1].split(',')[0]
-                duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
+                old_nom = txt.split('Nom: ')[1].split(',')[0].strip()
+                old_montant = txt.split('Montant: ')[1].split(' €')[0]
+                old_date_achat = txt.split('Date achat: ')[1].split(',')[0]
+                old_duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
             else:
                 # Format ancien sans nom
-                nom = ""
-                montant = txt.split('Montant: ')[1].split(' €')[0]
-                date_achat = txt.split('Date achat: ')[1].split(',')[0]
-                duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
+                old_nom = ""
+                old_montant = txt.split('Montant: ')[1].split(' €')[0]
+                old_date_achat = txt.split('Date achat: ')[1].split(',')[0]
+                old_duree = txt.split('Durée amort.: ')[1].split(' ans')[0]
         except Exception:
-            nom, montant, date_achat, duree = '', '', '', ''
-        dialog = InvestDialog(self, nom, montant, date_achat, duree)
+            old_nom, old_montant, old_date_achat, old_duree = '', '', '', ''
+        
+        dialog = InvestDialog(self, old_nom, old_montant, old_date_achat, old_duree)
         if dialog.exec():
-            invest_str = f"Nom: {dialog.nom_edit.text()}, Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
+            new_nom = dialog.nom_edit.text()
+            new_montant = dialog.montant_edit.text()
+            new_date_achat = dialog.date_achat.text()
+            new_duree = dialog.duree_edit.text()
+            
+            # Si le projet existe déjà, mettre à jour en base
+            if self.projet_id:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    # Mettre à jour l'investissement en base
+                    cursor.execute('''UPDATE investissements 
+                                      SET nom=?, montant=?, date_achat=?, duree=? 
+                                      WHERE projet_id=? AND nom=? AND montant=? AND date_achat=? AND duree=?''',
+                                  (new_nom, float(new_montant.replace(',', '.')), new_date_achat, int(new_duree),
+                                   self.projet_id, old_nom, float(old_montant.replace(',', '.')), old_date_achat, int(old_duree)))
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    print(f"Erreur lors de la mise à jour de l'investissement: {e}")
+            
+            # Mettre à jour l'affichage
+            invest_str = f"Nom: {new_nom}, Montant: {new_montant} €, Date achat: {new_date_achat}, Durée amort.: {new_duree} ans"
             item.setText(invest_str)
 
     def add_theme_tag(self, item):
@@ -695,7 +776,26 @@ class ProjectForm(QDialog):
     def add_invest(self):
         dialog = InvestDialog(self)
         if dialog.exec():
-            invest_str = f"Nom: {dialog.nom_edit.text()}, Montant: {dialog.montant_edit.text()} €, Date achat: {dialog.date_achat.text()}, Durée amort.: {dialog.duree_edit.text()} ans"
+            nom = dialog.nom_edit.text()
+            montant = dialog.montant_edit.text()
+            date_achat = dialog.date_achat.text()
+            duree = dialog.duree_edit.text()
+            
+            # Si le projet existe déjà, sauvegarder immédiatement en base
+            if self.projet_id:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute('''INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) 
+                                      VALUES (?, ?, ?, ?, ?)''',
+                                  (self.projet_id, nom, float(montant.replace(',', '.')), date_achat, int(duree)))
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    print(f"Erreur lors de la sauvegarde de l'investissement: {e}")
+            
+            # Ajouter à l'affichage
+            invest_str = f"Nom: {nom}, Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
             self.invest_list.addItem(invest_str)
 
     def add_subvention(self):
@@ -860,6 +960,33 @@ class ProjectForm(QDialog):
                 theme_principal
             ))
             projet_id = cursor.lastrowid
+            
+        # Sauvegarde des investissements
+        cursor.execute('DELETE FROM investissements WHERE projet_id=?', (projet_id,))
+        for i in range(self.invest_list.count()):
+            invest_text = self.invest_list.item(i).text()
+            try:
+                # Parse le texte de l'investissement
+                if 'Nom: ' in invest_text:
+                    nom = invest_text.split('Nom: ')[1].split(',')[0].strip()
+                    montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                else:
+                    # Format ancien sans nom
+                    nom = ""
+                    montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                
+                cursor.execute('''INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) 
+                                  VALUES (?, ?, ?, ?, ?)''',
+                              (projet_id, nom, montant, date_achat, duree))
+            except Exception as e:
+                print(f"Erreur lors de la sauvegarde de l'investissement: {e}")
+                # Continue avec les autres investissements
+                continue
+                
         conn.commit()
         conn.close()
         self.accept()
