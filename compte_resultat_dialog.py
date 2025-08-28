@@ -8,42 +8,6 @@ import datetime
 
 DB_PATH = 'gestion_budget.db'
 
-# Vérifier si la table cir_coeffs existe, sinon la créer
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Vérifier et créer la table cir_coeffs
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cir_coeffs'")
-    if not cursor.fetchone():
-        cursor.execute('''
-            CREATE TABLE cir_coeffs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                annee INTEGER,
-                k1 REAL,
-                k2 REAL,
-                k3 REAL
-            )
-        ''')
-    
-    # Vérifier et créer la table amortissements
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='amortissements'")
-    if not cursor.fetchone():
-        cursor.execute('''
-            CREATE TABLE amortissements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                projet_id INTEGER,
-                annee INTEGER,
-                mois TEXT,
-                montant REAL,
-                detail TEXT,
-                FOREIGN KEY (projet_id) REFERENCES projets (id)
-            )
-        ''')
-    
-    conn.commit()
-    conn.close()
-
 class CompteResultatDialog(QDialog):
     def __init__(self, parent, projet_id):
         super().__init__(parent)
@@ -395,8 +359,5 @@ class CompteResultatDialog(QDialog):
 
 def show_compte_resultat(parent, projet_id):
     """Affiche la fenêtre de compte de résultat"""
-    # Initialiser la base de données si nécessaire
-    init_db()
-    
     dialog = CompteResultatDialog(parent, projet_id)
     dialog.exec()
