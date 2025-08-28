@@ -71,6 +71,7 @@ class TaskManagerDialog(QDialog):
         for row_idx, (id_, nom, date_debut, date_fin, details, pourcentage_budget) in enumerate(cursor.fetchall()):
             self.table.insertRow(row_idx)
             self.table.setItem(row_idx, 0, QTableWidgetItem(nom))
+            # Display dates directly as they are stored in MM/YYYY format
             self.table.setItem(row_idx, 1, QTableWidgetItem(date_debut if date_debut else ""))
             self.table.setItem(row_idx, 2, QTableWidgetItem(date_fin if date_fin else ""))
             self.table.setItem(row_idx, 3, QTableWidgetItem(details if details else ""))
@@ -87,17 +88,37 @@ class TaskManagerDialog(QDialog):
 
     def add_task(self):
         dialog = AddTaskDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        while dialog.exec() == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
             nom = data["nom"]
             date_debut = parse_date_fr(data["date_debut"])
             date_fin = parse_date_fr(data["date_fin"])
             details = data["details"]
             pourcentage_budget = data["pourcentage_budget"]
+
+            # Check if start date is before or equal to end date
+            if date_debut > date_fin:
+                QMessageBox.warning(self, "Erreur de date", "La date de début doit être antérieure ou égale à la date de fin.")
+                continue
+
+            # Fetch project start and end dates
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id=?', (self.projet_id,))
+            projet_dates = cursor.fetchone()
+            conn.close()
+
+            if projet_dates:
+                projet_date_debut, projet_date_fin = projet_dates
+                if (date_debut < projet_date_debut) or (date_fin > projet_date_fin):
+                    QMessageBox.warning(self, "Erreur de date", "Les dates de la tâche doivent être comprises entre {} et {}.".format(projet_date_debut, projet_date_fin))
+                    continue
+
             total = self.get_total_pourcentage_budget()
             if total + pourcentage_budget > 100:
                 QMessageBox.warning(self, "Erreur budget", "La somme des pourcentages du budget dépasse 100%. Veuillez ajuster la répartition.")
-                return
+                continue
+
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute('INSERT INTO taches (projet_id, nom, date_debut, date_fin, details, pourcentage_budget) VALUES (?, ?, ?, ?, ?, ?)',
@@ -105,6 +126,7 @@ class TaskManagerDialog(QDialog):
             conn.commit()
             conn.close()
             self.repartir_budget_automatiquement()
+            break
 
     def closeEvent(self, event):
         total = self.get_total_pourcentage_budget()
@@ -151,21 +173,41 @@ class TaskManagerDialog(QDialog):
         details = self.table.item(idx, 3).text()
         pourcentage_budget = self.table.item(idx, 4).text()
         dialog = AddTaskDialog(self, nom, date_debut, date_fin, details, pourcentage_budget)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        while dialog.exec() == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
             nom = data["nom"]
             date_debut = parse_date_fr(data["date_debut"])
             date_fin = parse_date_fr(data["date_fin"])
             details = data["details"]
             pourcentage_budget = data["pourcentage_budget"]
+
+            # Check if start date is before or equal to end date
+            if date_debut > date_fin:
+                QMessageBox.warning(self, "Erreur de date", "La date de début doit être antérieure ou égale à la date de fin.")
+                continue
+
+            # Fetch project start and end dates
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id=?', (self.projet_id,))
+            projet_dates = cursor.fetchone()
+            conn.close()
+
+            if projet_dates:
+                projet_date_debut, projet_date_fin = projet_dates
+                if (date_debut < projet_date_debut) or (date_fin > projet_date_fin):
+                    QMessageBox.warning(self, "Erreur de date", "Les dates de la tâche doivent être comprises entre {} et {}.".format(projet_date_debut, projet_date_fin))
+                    continue
+
             task_id = self.task_ids[idx]
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute('UPDATE taches SET nom=?, date_debut=?, date_fin=?, details=?, pourcentage_budget=? WHERE id=?',
-                           (nom, data["date_debut"], data["date_fin"], details, pourcentage_budget, task_id))
+                           (nom, date_debut, date_fin, details, pourcentage_budget, task_id))
             conn.commit()
             conn.close()
             self.repartir_budget_automatiquement()
+            break
 
     def calculer_pourcentage_budget(self, date_debut, date_fin):
         # date_debut et date_fin sont au format YYYY-MM-DD
@@ -192,12 +234,12 @@ class AddTaskDialog(QDialog):
         layout.addWidget(QLabel("Date de début :"))
         self.date_debut_edit = QDateEdit()
         self.date_debut_edit.setCalendarPopup(True)
-        self.date_debut_edit.setDisplayFormat("dd/MM/yyyy")
+        self.date_debut_edit.setDisplayFormat("MM/yyyy")
         if date_debut:
             from datetime import datetime
             try:
-                d = datetime.strptime(date_debut, "%d/%m/%Y")
-                self.date_debut_edit.setDate(QDate(d.year, d.month, d.day))
+                d = datetime.strptime(date_debut, "%m/%Y")
+                self.date_debut_edit.setDate(QDate(d.year, d.month, 1))
             except Exception:
                 self.date_debut_edit.setDate(QDate.currentDate())
         else:
@@ -206,12 +248,12 @@ class AddTaskDialog(QDialog):
         layout.addWidget(QLabel("Date de fin :"))
         self.date_fin_edit = QDateEdit()
         self.date_fin_edit.setCalendarPopup(True)
-        self.date_fin_edit.setDisplayFormat("dd/MM/yyyy")
+        self.date_fin_edit.setDisplayFormat("MM/yyyy")
         if date_fin:
             from datetime import datetime
             try:
-                d = datetime.strptime(date_fin, "%d/%m/%Y")
-                self.date_fin_edit.setDate(QDate(d.year, d.month, d.day))
+                d = datetime.strptime(date_fin, "%m/%Y")
+                self.date_fin_edit.setDate(QDate(d.year, d.month, 1))
             except Exception:
                 self.date_fin_edit.setDate(QDate.currentDate())
         else:
@@ -240,8 +282,8 @@ class AddTaskDialog(QDialog):
 
     def validate_and_accept(self):
         nom = self.nom_edit.text().strip()
-        date_debut = self.date_debut_edit.date().toString("dd/MM/yyyy")
-        date_fin = self.date_fin_edit.date().toString("dd/MM/yyyy")
+        date_debut = self.date_debut_edit.date().toString("MM/yyyy")
+        date_fin = self.date_fin_edit.date().toString("MM/yyyy")
         if not nom:
             QMessageBox.warning(self, "Champ obligatoire", "Le nom de la tâche est obligatoire.")
             return
@@ -256,17 +298,17 @@ class AddTaskDialog(QDialog):
     def get_data(self):
         return {
             "nom": self.nom_edit.text(),
-            "date_debut": self.date_debut_edit.date().toString("dd/MM/yyyy"),
-            "date_fin": self.date_fin_edit.date().toString("dd/MM/yyyy"),
+            "date_debut": self.date_debut_edit.date().toString("MM/yyyy"),
+            "date_fin": self.date_fin_edit.date().toString("MM/yyyy"),
             "details": self.details_edit.toPlainText(),
             "pourcentage_budget": self.pourcentage_edit.value()
         }
 
 def parse_date_fr(date_str):
-    # Convertit une date DD/MM/YYYY en YYYY-MM-DD pour le stockage/calcul
+    # Convertit une date MM/YYYY en MM/YYYY pour le stockage
     try:
         from datetime import datetime
-        d = datetime.strptime(date_str, "%d/%m/%Y")
-        return d.strftime("%Y-%m-%d")
+        d = datetime.strptime(date_str, "%m/%Y")
+        return d.strftime("%m/%Y")
     except Exception:
         return ""
