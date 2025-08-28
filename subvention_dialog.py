@@ -20,8 +20,10 @@ class SubventionDialog(QDialog):
         self.spin_temps.setDecimals(2)
         self.spin_temps.setRange(0, 1)  # Coefficient entre 0 et 1
         self.spin_temps.setSingleStep(0.01)  # Pas de 0.01
+        # Ajuster les dispositions pour aligner les coefficients
         h_temps = QHBoxLayout()
         h_temps.addWidget(self.cb_temps)
+        h_temps.addStretch()
         h_temps.addWidget(QLabel('Coef:'))
         h_temps.addWidget(self.spin_temps)
         layout.addRow(h_temps)
@@ -33,6 +35,7 @@ class SubventionDialog(QDialog):
         self.spin_externes.setSingleStep(0.01)  # Pas de 0.01
         h_externes = QHBoxLayout()
         h_externes.addWidget(self.cb_externes)
+        h_externes.addStretch()
         h_externes.addWidget(QLabel('Coef:'))
         h_externes.addWidget(self.spin_externes)
         layout.addRow(h_externes)
@@ -44,6 +47,7 @@ class SubventionDialog(QDialog):
         self.spin_autres.setSingleStep(0.01)  # Pas de 0.01
         h_autres = QHBoxLayout()
         h_autres.addWidget(self.cb_autres)
+        h_autres.addStretch()
         h_autres.addWidget(QLabel('Coef:'))
         h_autres.addWidget(self.spin_autres)
         layout.addRow(h_autres)
@@ -55,6 +59,7 @@ class SubventionDialog(QDialog):
         self.spin_dotation.setSingleStep(0.01)  # Pas de 0.01
         h_dotation = QHBoxLayout()
         h_dotation.addWidget(self.cb_dotation)
+        h_dotation.addStretch()
         h_dotation.addWidget(QLabel('Coef:'))
         h_dotation.addWidget(self.spin_dotation)
         layout.addRow(h_dotation)
@@ -64,7 +69,7 @@ class SubventionDialog(QDialog):
         self.cd_spin.setDecimals(2)
         self.cd_spin.setRange(1, 2)  # Coefficient entre 1 et 2
         self.cd_spin.setSingleStep(0.01)  # Pas de 0.01
-        layout.addRow('Cd :', self.cd_spin)
+        layout.addRow('Coef de charge :', self.cd_spin)
         self.taux_spin = QDoubleSpinBox()
         self.taux_spin.setValue(round(100, 2))  # Valeur par défaut arrondie à 2 décimales
         self.taux_spin.setDecimals(2)
@@ -80,15 +85,15 @@ class SubventionDialog(QDialog):
 
         montant_layout = QVBoxLayout()
 
-        self.montant_label = QLabel("0 €")
-        self.montant_label.setStyleSheet("font-weight: bold; font-size: 14px; color: green;")
-        montant_layout.addWidget(QLabel("Montant estimé de la subvention:"))
-        montant_layout.addWidget(self.montant_label)
-
         self.assiette_label = QLabel("0 €")
         self.assiette_label.setStyleSheet("font-weight: bold; font-size: 14px; color: blue;")
         montant_layout.addWidget(QLabel("Assiette éligible:"))
         montant_layout.addWidget(self.assiette_label)
+
+        self.montant_label = QLabel("0 €")
+        self.montant_label.setStyleSheet("font-weight: bold; font-size: 14px; color: green;")
+        montant_layout.addWidget(QLabel("Montant estimé de la subvention:"))
+        montant_layout.addWidget(self.montant_label)
 
         layout.addRow(montant_layout)
         
@@ -103,7 +108,7 @@ class SubventionDialog(QDialog):
         self.depenses_max_spin.setRange(0, 1_000_000_000)
         self.depenses_max_spin.setSingleStep(100)
         self.depenses_max_spin.setValue(0)
-        layout.addRow('Dépenses éligibles max (€):', self.depenses_max_spin)
+        layout.addRow('Assiette éligibles max (€):', self.depenses_max_spin)
 
         self.subvention_max_spin = QDoubleSpinBox()
         self.subvention_max_spin.setDecimals(2)
@@ -154,6 +159,25 @@ class SubventionDialog(QDialog):
         self.update_montant()
         # Calculer l'assiette initiale après l'initialisation
         self.update_assiette()
+
+        # Ajouter des infobulles pour les coefficients
+        self.spin_temps.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.spin_externes.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.spin_autres.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.spin_dotation.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        # Ajouter des infobulles pour les noms des coefficients
+        self.cb_temps.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.cb_externes.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.cb_autres.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        self.cb_dotation.setToolTip("Ces coefficients permettent de réduire l'assiette éligible pour chaque catégorie de dépenses, selon les règles imposées par le financeur.")
+        # Ajouter une infobulle pour le coef de charge
+        self.cd_spin.setToolTip("Ce coefficient traduit le volume de charges directes assignées à la catégorie 'temps de travail'.")
+        # Ajouter une infobulle pour le texte 'Coef de charge' existant
+        for i in range(layout.rowCount()):
+            row_label = layout.itemAt(i, QFormLayout.ItemRole.LabelRole)
+            if row_label and row_label.widget() and row_label.widget().text() == 'Coef de charge :':
+                row_label.widget().setToolTip("Ce coefficient traduit le volume de charges directes assignées à la catégorie 'temps de travail'.")
+                break
 
     def get_project_data(self):
         """Récupère les données du projet pour calculer le montant de la subvention"""
