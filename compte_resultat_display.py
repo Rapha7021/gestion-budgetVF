@@ -1,4 +1,5 @@
 import sqlite3
+import datetime
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
                             QTableWidgetItem, QPushButton, QMessageBox, 
                             QFileDialog, QHeaderView)
@@ -113,14 +114,54 @@ class CompteResultatDisplay(QDialog):
             return f"{code} - {nom}"
         return "Projet inconnu"
     
+    def get_active_months_for_year(self, year):
+        """Détermine les mois actifs pour une année donnée en fonction des dates du projet"""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Récupérer les dates de début et fin de tous les projets
+            active_months = set()
+            
+            for project_id in self.project_ids:
+                cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+                project_info = cursor.fetchone()
+                
+                if not project_info or not project_info[0] or not project_info[1]:
+                    continue
+                
+                try:
+                    debut_projet = datetime.datetime.strptime(project_info[0], '%m/%Y')
+                    fin_projet = datetime.datetime.strptime(project_info[1], '%m/%Y')
+                    
+                    # Si l'année demandée est dans la période du projet
+                    if debut_projet.year <= year <= fin_projet.year:
+                        # Déterminer le mois de début pour cette année
+                        start_month = debut_projet.month if year == debut_projet.year else 1
+                        # Déterminer le mois de fin pour cette année
+                        end_month = fin_projet.month if year == fin_projet.year else 12
+                        
+                        # Ajouter tous les mois actifs pour ce projet
+                        for month in range(start_month, end_month + 1):
+                            active_months.add(month)
+                            
+                except (ValueError, TypeError):
+                    continue
+            
+            return sorted(active_months)
+            
+        finally:
+            conn.close()
+    
     def setup_table(self):
         """Configure le tableau du compte de résultat"""
         # Le nombre de colonnes dépend de la granularité et des années
         if self.granularity == 'monthly':
-            # Une colonne par mois pour chaque année
+            # Une colonne par mois actif pour chaque année
             columns = ["Poste"]
             for year in sorted(self.years):
-                for month in range(1, 13):
+                active_months = self.get_active_months_for_year(year)
+                for month in active_months:
                     columns.append(f"{month:02d}/{year}")
             columns.append("TOTAL")
         else:
@@ -194,7 +235,8 @@ class CompteResultatDisplay(QDialog):
             
             for year in self.years:
                 if self.granularity == 'monthly':
-                    for month in range(1, 13):
+                    active_months = self.get_active_months_for_year(year)
+                    for month in active_months:
                         period_key = f"{month:02d}/{year}"
                         data[period_key] = self.collect_period_data(cursor, year, month)
                 else:
@@ -249,145 +291,21 @@ class CompteResultatDisplay(QDialog):
             # Table n'existe pas encore
             data['recettes'] = 0
         
-        # 2. SUBVENTIONS - Calculées selon les paramètres définis
+        # 2. SUBVENTIONS - Répartition équitable par année/mois
         try:
-            # Récupérer tous les paramètres de subventions pour les projets
             subventions_total = 0
             for project_id in self.project_ids:
-                cursor.execute('''
-                    SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes,
-                           depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, 
-                           coef_dotation_amortissements, cd, taux 
-                    FROM subventions WHERE projet_id = ?
-                ''', (project_id,))
+                # Récupérer les informations du projet (dates, etc.)
+                cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+                projet_info = cursor.fetchone()
                 
-                subventions_projet = cursor.fetchall()
+                if not projet_info or not projet_info[0] or not projet_info[1]:
+                    continue  # Pas de dates de projet, skip
                 
-                for subvention in subventions_projet:
-                    (dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
-                     dep_amort, coef_amort, cd, taux) = subvention
-                    
-                    montant_subvention = 0
-                    
-                    # Temps de travail (si éligible)
-                    if dep_temps and coef_temps:
-                        # Calculer le coût du temps de travail pour ce projet et cette période
-                        if month:
-                            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-                                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-                            month_filter = f"AND t.mois = '{month_names[month-1]}'"
-                        else:
-                            month_filter = ""
-                            
-                        # Utiliser montant_charge comme dans subvention_dialog pour cohérence
-                        cursor.execute(f'''
-                            SELECT COALESCE(SUM(t.jours * c.montant_charge), 0)
-                            FROM temps_travail t
-                            JOIN categorie_cout c ON t.categorie = c.libelle AND t.annee = c.annee
-                            WHERE t.annee = {year} {month_filter} AND t.projet_id = ?
-                        ''', (project_id,))
-                        cout_temps = cursor.fetchone()[0] or 0
-                        montant_subvention += (cout_temps * cd * coef_temps)
-                    
-                    # Dépenses externes (si éligibles)
-                    if dep_ext and coef_ext:
-                        cursor.execute(f'''
-                            SELECT COALESCE(SUM(montant), 0) FROM depenses 
-                            WHERE annee = {year} {month_condition} AND projet_id = ?
-                        ''', (project_id,))
-                        depenses_ext = cursor.fetchone()[0] or 0
-                        montant_subvention += (depenses_ext * coef_ext)
-                    
-                    # Autres achats (si éligibles)
-                    if dep_autres and coef_autres:
-                        cursor.execute(f'''
-                            SELECT COALESCE(SUM(montant), 0) FROM autres_depenses 
-                            WHERE annee = {year} {month_condition} AND projet_id = ?
-                        ''', (project_id,))
-                        autres_achats = cursor.fetchone()[0] or 0
-                        montant_subvention += (autres_achats * coef_autres)
-                    
-                    # Dotation aux amortissements (si éligible)
-                    if dep_amort and coef_amort:
-                        # Calcul des amortissements comme dans subvention_dialog.py
-                        # Récupérer les dates du projet
-                        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (project_id,))
-                        projet_dates = cursor.fetchone()
-                        
-                        if projet_dates and projet_dates[0] and projet_dates[1]:
-                            import datetime
-                            try:
-                                debut_projet = datetime.datetime.strptime(projet_dates[0], '%m/%Y')
-                                fin_projet = datetime.datetime.strptime(projet_dates[1], '%m/%Y')
-                                
-                                # Récupérer tous les investissements du projet
-                                cursor.execute('''
-                                    SELECT montant, date_achat, duree 
-                                    FROM investissements 
-                                    WHERE projet_id = ?
-                                ''', (project_id,))
-                                
-                                amortissements_total = 0
-                                
-                                for montant_inv, date_achat, duree in cursor.fetchall():
-                                    try:
-                                        # Convertir la date d'achat en datetime
-                                        achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
-                                        
-                                        # La dotation commence le mois suivant l'achat
-                                        debut_amort = achat_date.replace(day=1)
-                                        debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
-                                        debut_amort = debut_amort.replace(day=1)
-                                        
-                                        # La fin de l'amortissement
-                                        fin_amort = datetime.datetime(achat_date.year + int(duree), achat_date.month, 1)
-                                        fin_effective = min(fin_projet, fin_amort)
-                                        
-                                        # Si le début d'amortissement est après la fin du projet, pas d'amortissement
-                                        if debut_amort > fin_projet:
-                                            continue
-                                        
-                                        # Pour l'année spécifique, calculer la part d'amortissement
-                                        year_start = datetime.datetime(year, 1, 1)
-                                        year_end = datetime.datetime(year, 12, 31)
-                                        
-                                        # Intersection avec l'année demandée
-                                        period_start = max(debut_amort, year_start)
-                                        period_end = min(fin_effective, year_end)
-                                        
-                                        if period_start <= period_end:
-                                            # Calculer le nombre de mois dans cette année
-                                            if month:
-                                                # Pour un mois spécifique
-                                                month_start = datetime.datetime(year, month, 1)
-                                                month_end = datetime.datetime(year, month, 28)  # Approximation
-                                                if period_start <= month_end and period_end >= month_start:
-                                                    mois_amort = 1
-                                                else:
-                                                    mois_amort = 0
-                                            else:
-                                                # Pour toute l'année
-                                                mois_amort = (period_end.year - period_start.year) * 12 + period_end.month - period_start.month + 1
-                                            
-                                            # Calculer la dotation mensuelle
-                                            dotation_mensuelle = float(montant_inv) / (int(duree) * 12)
-                                            amortissements_total += dotation_mensuelle * mois_amort
-                                    
-                                    except Exception:
-                                        continue
-                                
-                                montant_subvention += (amortissements_total * coef_amort)
-                                
-                            except ValueError:
-                                # Dates de projet invalides
-                                montant_subvention += 0
-                        else:
-                            # Pas de dates de projet
-                            montant_subvention += 0
-                    
-                    # Appliquer le taux de subvention
-                    montant_subvention = montant_subvention * (taux / 100)
-                    subventions_total += montant_subvention
+                # Calculer la subvention répartie pour cette période
+                subvention_periode = self.calculate_simple_distributed_subvention(
+                    cursor, project_id, year, month, projet_info)
+                subventions_total += subvention_periode
             
             data['subventions'] = subventions_total
         except sqlite3.OperationalError:
@@ -756,6 +674,289 @@ class CompteResultatDisplay(QDialog):
         """
         
         return html
+    
+    def calculate_simple_distributed_subvention(self, cursor, project_id, year, month, projet_info):
+        """Calcule la subvention répartie équitablement selon la règle simple :
+        Subvention totale / Nb mois total du projet
+        UTILISE LA MÊME LOGIQUE QUE subvention_dialog.py"""
+        import datetime
+        
+        try:
+            # Récupérer les paramètres de subvention pour ce projet
+            cursor.execute('''
+                SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes,
+                       depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, 
+                       coef_dotation_amortissements, cd, taux 
+                FROM subventions WHERE projet_id = ?
+            ''', (project_id,))
+            
+            subventions_config = cursor.fetchall()
+            if not subventions_config:
+                return 0
+            
+            # Calculer le montant total de subvention sur tout le projet
+            montant_total_projet = 0
+            
+            for subvention in subventions_config:
+                (dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
+                 dep_amort, coef_amort, cd, taux) = subvention
+                
+                montant_subvention_config = 0
+                
+                # 1. TEMPS DE TRAVAIL - MÊME LOGIQUE QUE subvention_dialog.py
+                if dep_temps and coef_temps:
+                    cout_total_temps = self.calculate_temps_travail_total(cursor, project_id)
+                    temps_travail = cout_total_temps * cd
+                    montant_subvention_config += coef_temps * temps_travail
+                
+                # 2. DÉPENSES EXTERNES - MÊME LOGIQUE
+                if dep_ext and coef_ext:
+                    cursor.execute('''
+                        SELECT COALESCE(SUM(montant), 0) FROM depenses 
+                        WHERE projet_id = ?
+                    ''', (project_id,))
+                    depenses_ext_total = cursor.fetchone()[0] or 0
+                    montant_subvention_config += coef_ext * depenses_ext_total
+                
+                # 3. AUTRES ACHATS - MÊME LOGIQUE
+                if dep_autres and coef_autres:
+                    cursor.execute('''
+                        SELECT COALESCE(SUM(montant), 0) FROM autres_depenses 
+                        WHERE projet_id = ?
+                    ''', (project_id,))
+                    autres_achats_total = cursor.fetchone()[0] or 0
+                    montant_subvention_config += coef_autres * autres_achats_total
+                
+                # 4. AMORTISSEMENTS - MÊME LOGIQUE QUE subvention_dialog.py
+                if dep_amort and coef_amort:
+                    amortissements_total = self.calculate_amortissements_total_subvention_style(
+                        cursor, project_id, projet_info)
+                    montant_subvention_config += coef_amort * amortissements_total
+                
+                # Appliquer le taux de subvention
+                montant_subvention_config = montant_subvention_config * (taux / 100)
+                montant_total_projet += montant_subvention_config
+            
+            # Calculer les dates du projet
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
+            # Calculer le nombre total de mois du projet
+            nb_mois_total = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
+            
+            # Vérifier si l'année demandée est dans la période du projet
+            if year < debut_projet.year or year > fin_projet.year:
+                return 0  # L'année n'est pas dans le projet
+            
+            if month:
+                # Pour un mois : Subvention totale / Nombre total de mois du projet
+                return montant_total_projet / nb_mois_total
+            else:
+                # Pour une année complète : Calculer combien de mois actifs dans cette année
+                start_month = debut_projet.month if year == debut_projet.year else 1
+                end_month = fin_projet.month if year == fin_projet.year else 12
+                nb_mois_annee = end_month - start_month + 1
+                
+                # Subvention = (Subvention totale / Nb mois total) * Nb mois dans cette année
+                return (montant_total_projet / nb_mois_total) * nb_mois_annee
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_simple_distributed_subvention: {e}")
+            return 0
+    
+    def calculate_temps_travail_total(self, cursor, project_id):
+        """Calcule le temps de travail total exactement comme dans subvention_dialog.py"""
+        try:
+            cursor.execute("""
+                SELECT tt.annee, tt.categorie, tt.mois, tt.jours 
+                FROM temps_travail tt 
+                WHERE tt.projet_id = ?
+            """, (project_id,))
+            
+            temps_travail_rows = cursor.fetchall()
+            cout_total_temps = 0
+            
+            for annee, categorie, mois, jours in temps_travail_rows:
+                # Convertir la catégorie du temps de travail au format de categorie_cout
+                # MÊME LOGIQUE QUE subvention_dialog.py lignes 111-127
+                categorie_code = ""
+                if "Stagiaire" in categorie:
+                    categorie_code = "STP"
+                elif "Assistante" in categorie or "opérateur" in categorie:
+                    categorie_code = "AOP"
+                elif "Technicien" in categorie:
+                    categorie_code = "TEP"
+                elif "Junior" in categorie:
+                    categorie_code = "IJP"
+                elif "Senior" in categorie:
+                    categorie_code = "ISP"
+                elif "Expert" in categorie:
+                    categorie_code = "EDP"
+                elif "moyen" in categorie:
+                    categorie_code = "MOY"
+                
+                # Si on n'a pas trouvé de correspondance, continuer
+                if not categorie_code:
+                    continue
+                    
+                # Récupérer le montant chargé pour cette catégorie et cette année
+                cursor.execute("""
+                    SELECT montant_charge 
+                    FROM categorie_cout 
+                    WHERE categorie = ? AND annee = ?
+                """, (categorie_code, annee))
+                
+                cout_row = cursor.fetchone()
+                if cout_row and cout_row[0]:
+                    montant_charge = float(cout_row[0])
+                    cout_total_temps += jours * montant_charge
+                else:
+                    # Si pas de coût pour cette année/catégorie, utiliser une valeur par défaut
+                    cout_total_temps += jours * 500  # 500€ par jour par défaut
+            
+            return cout_total_temps
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_temps_travail_total: {e}")
+            return 0
+    
+    def calculate_amortissements_total_subvention_style(self, cursor, project_id, projet_info):
+        """Calcule les amortissements totaux exactement comme dans subvention_dialog.py"""
+        import datetime
+        
+        try:
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+            
+            # Convertir les dates MM/yyyy en objets datetime - MÊME LOGIQUE
+            try:
+                debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            except ValueError:
+                return 0
+            
+            cursor.execute("""
+                SELECT montant, date_achat, duree 
+                FROM investissements 
+                WHERE projet_id = ?
+            """, (project_id,))
+            
+            amortissements_total = 0
+            
+            for montant, date_achat, duree in cursor.fetchall():
+                try:
+                    # MÊME LOGIQUE QUE subvention_dialog.py lignes 177-213
+                    # Convertir la date d'achat en datetime
+                    achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
+                    
+                    # La dotation commence le mois suivant l'achat
+                    debut_amort = achat_date.replace(day=1)
+                    debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
+                    debut_amort = debut_amort.replace(day=1)
+                    
+                    # La fin de l'amortissement est soit la fin du projet, soit la fin de la période d'amortissement
+                    fin_amort = achat_date.replace(day=1)
+                    # Ajouter durée années à la date d'achat
+                    fin_amort = datetime.datetime(fin_amort.year + int(duree), fin_amort.month, 1)
+                    
+                    # Prendre la date la plus proche entre fin du projet et fin d'amortissement
+                    fin_effective = min(fin_projet, fin_amort)
+                    
+                    # Si le début d'amortissement est après la fin du projet, pas d'amortissement
+                    if debut_amort > fin_projet:
+                        continue
+                        
+                    # Calculer le nombre de mois d'amortissement effectif
+                    mois_amort = (fin_effective.year - debut_amort.year) * 12 + fin_effective.month - debut_amort.month + 1
+                    
+                    # Calculer la dotation mensuelle (montant / durée en mois)
+                    dotation_mensuelle = float(montant) / (int(duree) * 12)
+                    
+                    # Ajouter au total des amortissements
+                    amortissements_total += dotation_mensuelle * mois_amort
+                except Exception:
+                    # En cas d'erreur dans le calcul, ignorer cet investissement
+                    continue
+            
+            return amortissements_total
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_amortissements_total_subvention_style: {e}")
+            return 0
+    
+    
+    def calculate_amortissement_for_year(self, cursor, project_id, year, month, projet_info):
+        """Calcule les amortissements pour une année donnée"""
+        import datetime
+        
+        try:
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+                
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
+            # Récupérer tous les investissements du projet
+            cursor.execute('''
+                SELECT montant, date_achat, duree 
+                FROM investissements 
+                WHERE projet_id = ?
+            ''', (project_id,))
+            
+            amortissements_total = 0
+            
+            for montant_inv, date_achat, duree in cursor.fetchall():
+                try:
+                    # Convertir la date d'achat en datetime
+                    achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
+                    
+                    # La dotation commence le mois suivant l'achat
+                    debut_amort = achat_date.replace(day=1)
+                    debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
+                    debut_amort = debut_amort.replace(day=1)
+                    
+                    # La fin de l'amortissement
+                    fin_amort = datetime.datetime(achat_date.year + int(duree), achat_date.month, 1)
+                    fin_effective = min(fin_projet, fin_amort)
+                    
+                    # Si le début d'amortissement est après la fin du projet, pas d'amortissement
+                    if debut_amort > fin_projet:
+                        continue
+                    
+                    # Pour l'année spécifique, calculer la part d'amortissement
+                    year_start = datetime.datetime(year, 1, 1)
+                    year_end = datetime.datetime(year, 12, 31)
+                    
+                    # Intersection avec l'année demandée
+                    period_start = max(debut_amort, year_start)
+                    period_end = min(fin_effective, year_end)
+                    
+                    if period_start <= period_end:
+                        # Calculer le nombre de mois dans cette année
+                        if month:
+                            # Pour un mois spécifique
+                            month_start = datetime.datetime(year, month, 1)
+                            month_end = datetime.datetime(year, month, 28)  # Approximation
+                            if period_start <= month_end and period_end >= month_start:
+                                mois_amort = 1
+                            else:
+                                mois_amort = 0
+                        else:
+                            # Pour toute l'année
+                            mois_amort = (period_end.year - period_start.year) * 12 + period_end.month - period_start.month + 1
+                        
+                        # Calculer la dotation mensuelle
+                        dotation_mensuelle = float(montant_inv) / (int(duree) * 12)
+                        amortissements_total += dotation_mensuelle * mois_amort
+                
+                except Exception:
+                    continue
+            
+            return amortissements_total
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_amortissement_for_year: {e}")
+            return 0
 
 def show_compte_resultat(parent, config_data):
     """Fonction pour afficher le compte de résultat"""
