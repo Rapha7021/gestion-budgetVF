@@ -193,8 +193,8 @@ class CategorieCoutDialog(QDialog):
         
         # Ajouter la catégorie pour chaque année
         for year in years:
-            cursor.execute('''INSERT OR IGNORE INTO categorie_cout (annee, categorie) VALUES (?, ?)''', 
-                          (year, code))
+            cursor.execute('''INSERT OR IGNORE INTO categorie_cout (annee, categorie, libelle) VALUES (?, ?, ?)''', 
+                          (year, code, libelle))
         
         conn.commit()
         conn.close()
@@ -355,8 +355,8 @@ class CategorieCoutDialog(QDialog):
                     # Insertion uniquement si au moins un champ est renseigné
                     fields = ', '.join(update_fields.keys())
                     placeholders = ', '.join(['?'] * len(update_fields))
-                    sql = f"INSERT INTO categorie_cout (annee, categorie, {fields}) VALUES (?, ?, {placeholders})"
-                    cursor.execute(sql, [year, code] + list(update_fields.values()))
+                    sql = f"INSERT INTO categorie_cout (annee, categorie, libelle, {fields}) VALUES (?, ?, ?, {placeholders})"
+                    cursor.execute(sql, [year, code, libelle] + list(update_fields.values()))
         conn.commit()
         conn.close()
         if show_message:
@@ -369,6 +369,7 @@ class CategorieCoutDialog(QDialog):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             annee INTEGER,
             categorie TEXT,
+            libelle TEXT,
             montant_charge REAL,
             cout_production REAL,
             cout_complet REAL

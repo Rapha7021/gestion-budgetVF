@@ -120,6 +120,30 @@ class PrintConfigDialog(QDialog):
         period_group.setLayout(period_layout)
         layout.addWidget(period_group)
 
+        # Type de coût
+        cost_type_group = QGroupBox("Type de coût")
+        cost_type_layout = QVBoxLayout()
+
+        self.cost_type_group = QButtonGroup(self)
+
+        self.radio_montant_charge = QRadioButton("Montant chargé")
+        self.radio_cout_production = QRadioButton("Coût de production")
+        self.radio_cout_complet = QRadioButton("Coût complet")
+
+        self.cost_type_group.addButton(self.radio_montant_charge)
+        self.cost_type_group.addButton(self.radio_cout_production)
+        self.cost_type_group.addButton(self.radio_cout_complet)
+
+        # Coût de production par défaut
+        self.radio_cout_production.setChecked(True)
+
+        cost_type_layout.addWidget(self.radio_montant_charge)
+        cost_type_layout.addWidget(self.radio_cout_production)
+        cost_type_layout.addWidget(self.radio_cout_complet)
+
+        cost_type_group.setLayout(cost_type_layout)
+        layout.addWidget(cost_type_group)
+
         # Boutons
         buttons_layout = QHBoxLayout()
 
@@ -671,6 +695,24 @@ class PrintConfigDialog(QDialog):
                 """, selected_theme_ids)
                 project_ids = [row[0] for row in cursor.fetchall()]
                 conn.close()
+        elif self.radio_by_main_theme.isChecked():
+            # Projets par thème principal sélectionné
+            selected_main_themes = []
+            for i in range(self.main_theme_list_widget.count()):
+                item = self.main_theme_list_widget.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected_main_themes.append(item.data(Qt.ItemDataRole.UserRole))
+            
+            if selected_main_themes:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                placeholders = ','.join('?' * len(selected_main_themes))
+                cursor.execute(f"""
+                    SELECT id FROM projets 
+                    WHERE theme_principal IN ({placeholders})
+                """, selected_main_themes)
+                project_ids = [row[0] for row in cursor.fetchall()]
+                conn.close()
         
         return project_ids
 
@@ -878,32 +920,114 @@ class PrintConfigDialog(QDialog):
             return project_id, None, "complete_project"
     
     def generate_compte_resultat(self):
-        """Génère le compte de résultat - pour l'instant juste un message"""
-        project_id, year, month = self.get_selected_period()
+        """Génère le compte de résultat"""
+        # Récupérer les IDs des projets sélectionnés
+        project_ids = self.get_selected_project_ids()
         
-        if project_id is None:
-            QMessageBox.warning(self, "Avertissement", "Veuillez sélectionner un projet.")
+        if not project_ids:
+            QMessageBox.warning(self, "Avertissement", "Veuillez sélectionner au moins un projet.")
             return
         
-        # Déterminer le type de période
-        if month == "complete_project":
-            period_type = "complete_project"
-            year = None
-            month = None
+        # Récupérer les années sélectionnées
+        years = self.get_selected_years()
+        
+        if not years:
+            QMessageBox.warning(self, "Avertissement", "Veuillez sélectionner au moins une année.")
+            return
+        
+        # Déterminer la granularité
+        granularity = "monthly" if self.radio_monthly.isChecked() else "yearly"
+        
+        # Préparer la configuration pour le compte de résultat
+        config_data = {
+            'project_ids': project_ids,
+            'years': years,
+            'granularity': granularity,
+            'period_type': self.get_period_type(),
+            'cost_type': self.get_cost_type()
+        }
+        
+        # Importer et afficher le compte de résultat
+        try:
+            from compte_resultat_display import show_compte_resultat
+            show_compte_resultat(self.parent, config_data)
+            self.accept()
+        except ImportError as e:
+            QMessageBox.critical(self, "Erreur", f"Impossible d'importer le module compte_resultat_display: {str(e)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de l'affichage du compte de résultat: {str(e)}")
+    
+    def get_selected_years(self):
+        """Retourne la liste des années sélectionnées"""
+        if self.period_type.currentIndex() == 0:  # Année spécifique
+            year_text = self.year_combo.currentText()
+            if year_text:
+                return [int(year_text)]
+        elif self.period_type.currentIndex() == 1:  # Plusieurs années
+            years = []
+            for i in range(self.years_list_widget.count()):
+                item = self.years_list_widget.item(i)
+                if item.checkState() == Qt.CheckState.Checked:
+                    years.append(int(item.text()))
+            return years
+        else:  # Période globale du projet
+            # Récupérer toutes les années du projet
+            return self.get_all_project_years()
+        
+        return []
+    
+    def get_all_project_years(self):
+        """Récupère toutes les années des projets sélectionnés"""
+        project_ids = self.get_selected_project_ids()
+        if not project_ids:
+            return []
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            placeholders = ','.join('?' * len(project_ids))
+            cursor.execute(f"""
+                SELECT date_debut, date_fin FROM projets 
+                WHERE id IN ({placeholders})
+                AND date_debut IS NOT NULL AND date_fin IS NOT NULL
+            """, project_ids)
+            
+            years_set = set()
+            for date_debut, date_fin in cursor.fetchall():
+                try:
+                    debut_annee = int(date_debut.split("/")[1])
+                    fin_annee = int(date_fin.split("/")[1])
+                    
+                    for year in range(debut_annee, fin_annee + 1):
+                        years_set.add(year)
+                        
+                except (IndexError, ValueError):
+                    continue
+            
+            return sorted(list(years_set))
+            
+        finally:
+            conn.close()
+    
+    def get_period_type(self):
+        """Retourne le type de période sélectionné"""
+        if self.period_type.currentIndex() == 0:
+            return "specific_year"
+        elif self.period_type.currentIndex() == 1:
+            return "multiple_years"
         else:
-            period_type = None
-        
-        # Pour l'instant, juste afficher les paramètres sélectionnés
-        granularity = "Par mois" if self.radio_monthly.isChecked() else "Par an"
-        
-        message = f"Configuration sélectionnée :\n"
-        message += f"Projet(s) : {project_id}\n"
-        message += f"Année(s) : {year}\n"
-        message += f"Type de période : {period_type or 'Standard'}\n"
-        message += f"Granularité : {granularity}"
-        
-        QMessageBox.information(self, "Configuration", message)
-        self.accept()
+            return "complete_project"
+    
+    def get_cost_type(self):
+        """Retourne le type de coût sélectionné"""
+        if self.radio_montant_charge.isChecked():
+            return "montant_charge"
+        elif self.radio_cout_production.isChecked():
+            return "cout_production"
+        elif self.radio_cout_complet.isChecked():
+            return "cout_complet"
+        else:
+            return "cout_production"  # Par défaut
 
 def show_print_config_dialog(parent, projet_id=None):
     """Fonction d'entrée pour afficher la configuration d'impression"""

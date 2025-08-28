@@ -678,6 +678,25 @@ class ProjectForm(QDialog):
         dialog.projet_id = self.projet_id
         if dialog.exec():
             data = dialog.get_data()
+            
+            # Si le projet existe déjà, sauvegarder immédiatement en base
+            if self.projet_id:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute('''INSERT INTO subventions 
+                    (projet_id, nom, depenses_temps_travail, coef_temps_travail, 
+                     depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                     depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                     depenses_eligibles_max, montant_subvention_max) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (self.projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                     data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                     data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
+                     data['depenses_eligibles_max'], data['montant_subvention_max']))
+                conn.commit()
+                conn.close()
+            
+            # Ajouter aux données temporaires dans tous les cas
             self.subventions_data.append(data)
             cats = []
             if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
@@ -705,6 +724,21 @@ class ProjectForm(QDialog):
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
                     row = self.subv_list.row(item)
+                    
+                    # Si le projet existe déjà, supprimer de la base
+                    if self.projet_id:
+                        conn = sqlite3.connect(DB_PATH)
+                        cursor = conn.cursor()
+                        # Récupérer l'ID de la subvention en base (basé sur le rang dans la liste)
+                        cursor.execute('SELECT id FROM subventions WHERE projet_id=? ORDER BY id', (self.projet_id,))
+                        subv_ids = [r[0] for r in cursor.fetchall()]
+                        if row < len(subv_ids):
+                            subv_id = subv_ids[row]
+                            cursor.execute('DELETE FROM subventions WHERE id=?', (subv_id,))
+                        conn.commit()
+                        conn.close()
+                    
+                    # Supprimer des données temporaires
                     self.subv_list.takeItem(row)
                     if row < len(self.subventions_data):
                         self.subventions_data.pop(row)
@@ -720,6 +754,30 @@ class ProjectForm(QDialog):
         dialog.projet_id = self.projet_id
         if dialog.exec():
             data = dialog.get_data()
+            
+            # Si le projet existe déjà, mettre à jour en base
+            if self.projet_id:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                # Récupérer l'ID de la subvention en base (basé sur le rang dans la liste)
+                cursor.execute('SELECT id FROM subventions WHERE projet_id=? ORDER BY id', (self.projet_id,))
+                subv_ids = [r[0] for r in cursor.fetchall()]
+                if row < len(subv_ids):
+                    subv_id = subv_ids[row]
+                    cursor.execute('''UPDATE subventions SET 
+                        nom=?, depenses_temps_travail=?, coef_temps_travail=?, 
+                        depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
+                        depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
+                        depenses_eligibles_max=?, montant_subvention_max=? 
+                        WHERE id=?''',
+                        (data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                         data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                         data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
+                         data['depenses_eligibles_max'], data['montant_subvention_max'], subv_id))
+                conn.commit()
+                conn.close()
+            
+            # Mettre à jour les données temporaires
             self.subventions_data[row] = data
             cats = []
             if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
@@ -843,7 +901,7 @@ class ProjectForm(QDialog):
         # Subventions liées
         self.subv_list.clear()
         self.subventions_data = []
-        cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom FROM subventions WHERE projet_id=?', (self.projet_id,))
+        cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max FROM subventions WHERE projet_id=?', (self.projet_id,))
         for subv in cursor.fetchall():
             data = {
                 'depenses_temps_travail': subv[0],
@@ -856,7 +914,9 @@ class ProjectForm(QDialog):
                 'coef_dotation_amortissements': subv[7],
                 'cd': subv[8],
                 'taux': subv[9],
-                'nom': subv[10]
+                'nom': subv[10],
+                'depenses_eligibles_max': subv[11] if len(subv) > 11 else 0,
+                'montant_subvention_max': subv[12] if len(subv) > 12 else 0
             }
             self.subventions_data.append(data)
             cats = []
