@@ -344,6 +344,38 @@ class CompteResultatDisplay(QDialog):
             """
             cursor.execute(query, self.project_ids)
             data['cout_direct'] = cursor.fetchone()[0] or 0
+            
+            # Vérification pour debug : si le coût direct est 0, vérifier pourquoi
+            if data['cout_direct'] == 0:
+                # Compter les entrées de temps de travail
+                count_query = f"""
+                    SELECT COUNT(*) FROM temps_travail t
+                    WHERE t.annee = {year} {month_condition.replace('mois', 't.mois') if month_condition else ''} 
+                    AND t.projet_id IN ({','.join(['?'] * len(self.project_ids))})
+                """
+                cursor.execute(count_query, self.project_ids)
+                temps_count = cursor.fetchone()[0]
+                
+                # Compter les catégories de coût disponibles
+                cursor.execute(f"SELECT COUNT(*) FROM categorie_cout WHERE annee = {year}")
+                cat_count = cursor.fetchone()[0]
+                
+                print(f"DEBUG: Coût direct = 0 pour année {year}")
+                print(f"  - Entrées temps_travail trouvées: {temps_count}")
+                print(f"  - Catégories de coût pour {year}: {cat_count}")
+                
+                if temps_count > 0:
+                    # Vérifier les catégories qui ne matchent pas
+                    cursor.execute(f"""
+                        SELECT DISTINCT t.categorie 
+                        FROM temps_travail t 
+                        WHERE t.annee = {year} AND t.projet_id IN ({','.join(['?'] * len(self.project_ids))})
+                        AND t.categorie NOT IN (SELECT libelle FROM categorie_cout WHERE annee = {year})
+                    """, self.project_ids)
+                    missing_cats = [row[0] for row in cursor.fetchall()]
+                    if missing_cats:
+                        print(f"  - Catégories temps_travail sans correspondance: {missing_cats}")
+                        
         except sqlite3.OperationalError as e:
             print(f"Erreur SQL coût direct: {e}")
             data['cout_direct'] = 0
