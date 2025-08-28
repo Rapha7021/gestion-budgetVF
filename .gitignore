@@ -9,3 +9,4 @@ __pycache__/
 # SQLite & médias
 media/
 !media/.gitkeep
+print_result_action_backup.py
