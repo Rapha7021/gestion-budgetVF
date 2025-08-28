@@ -1,4 +1,5 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QSpinBox, QMessageBox
+from PyQt6.QtCore import Qt
 import sqlite3
 
 DB_PATH = 'gestion_budget.db'
@@ -26,7 +27,7 @@ class CIRDialog(QDialog):
 
         # Tableau CIR
         self.table = QTableWidget(1, 3)
-        self.table.setHorizontalHeaderLabels(['K1 (jours)', 'K2 (amortissement)', 'K3 (net éligible)'])
+        self.table.setHorizontalHeaderLabels(['K1', 'K2', 'K3'])
         self.table.setColumnWidth(0, 120)
         self.table.setColumnWidth(1, 120)
         self.table.setColumnWidth(2, 120)
@@ -36,6 +37,11 @@ class CIRDialog(QDialog):
         for col in range(3):
             self.table.setItem(0, col, QTableWidgetItem(""))
 
+        # Ajouter des infobulles pour les colonnes du tableau CIR
+        self.table.horizontalHeaderItem(0).setToolTip("Coefficient pour les charges directes associées aux temps de travail")
+        self.table.horizontalHeaderItem(1).setToolTip("Coefficient pour les charges directes associées aux amortissements")
+        self.table.horizontalHeaderItem(2).setToolTip("Taux de \"subvention\" CIR")
+
         # Boutons
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton('Enregistrer')
@@ -43,11 +49,34 @@ class CIRDialog(QDialog):
         btn_layout.addWidget(self.save_btn)
         main_layout.addLayout(btn_layout)
 
+        # Restreindre les valeurs des coefficients K1, K2 et K3
+        for col in range(3):
+            item = self.table.item(0, col)
+            if item:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.table.cellChanged.connect(self.validate_coefficients)
         self.table.cellChanged.connect(self.validate_and_mark_dirty)
         self.setLayout(main_layout)
         self.current_year = self.year_spin.value()
         self.load_data()
         
+    def validate_coefficients(self, row, column):
+        if column in [0, 1, 2]:
+            item = self.table.item(row, column)
+            if item and item.text():
+                try:
+                    value = float(item.text().replace(',', '.'))
+                    if not (0 <= value <= 1):
+                        raise ValueError("Value out of range")
+                    # Limiter à deux chiffres après la virgule
+                    item.setText(f"{value:.2f}")
+                except ValueError:
+                    QMessageBox.warning(self, "Erreur", "Veuillez entrer un nombre entre 0 et 1 avec deux chiffres après la virgule.")
+                    self.table.blockSignals(True)
+                    item.setText("")
+                    self.table.blockSignals(False)
+
     def validate_and_mark_dirty(self, row, column):
         # Ne pas traiter les changements pendant le chargement des données
         if getattr(self, '_loading', False):
@@ -129,6 +158,9 @@ class CIRDialog(QDialog):
             self.accept()
 
     def save_data(self, show_message=True):
+        # Sauvegarder les valeurs actuelles dans les brouillons avant de les enregistrer
+        self.brouillons[self.current_year] = self.get_table_values()
+
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # Sauvegarder tous les brouillons (toutes les années modifiées)
@@ -156,32 +188,7 @@ class CIRDialog(QDialog):
             else:
                 sql = "INSERT INTO cir_coeffs (annee, k1, k2, k3) VALUES (?, ?, ?, ?)"
                 cursor.execute(sql, [year, k1_val, k2_val, k3_val])
-        # Sauvegarder aussi l'année courante si elle n'est pas dans les brouillons
-        current_year = self.year_spin.value()
-        if current_year not in self.brouillons:
-            k1 = self.table.item(0, 0)
-            k2 = self.table.item(0, 1)
-            k3 = self.table.item(0, 2)
-            try:
-                k1_val = float(k1.text().replace(',', '.')) if k1 and k1.text().strip() else None
-            except Exception:
-                k1_val = None
-            try:
-                k2_val = float(k2.text().replace(',', '.')) if k2 and k2.text().strip() else None
-            except Exception:
-                k2_val = None
-            try:
-                k3_val = float(k3.text().replace(',', '.')) if k3 and k3.text().strip() else None
-            except Exception:
-                k3_val = None
-            cursor.execute('SELECT id FROM cir_coeffs WHERE annee=?', (current_year,))
-            res = cursor.fetchone()
-            if res:
-                sql = "UPDATE cir_coeffs SET k1=?, k2=?, k3=? WHERE id=?"
-                cursor.execute(sql, [k1_val, k2_val, k3_val, res[0]])
-            else:
-                sql = "INSERT INTO cir_coeffs (annee, k1, k2, k3) VALUES (?, ?, ?, ?)"
-                cursor.execute(sql, [current_year, k1_val, k2_val, k3_val])
+
         conn.commit()
         conn.close()
         if show_message:
