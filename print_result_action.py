@@ -314,6 +314,52 @@ class PrintConfigDialog(QDialog):
         finally:
             conn.close()
 
+    def update_years_for_all_projects_multiple(self):
+        """Met à jour la liste des années cochables avec toutes les années où il y a au moins un projet."""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE date_debut IS NOT NULL AND date_fin IS NOT NULL")
+            results = cursor.fetchall()
+            
+            if not results:
+                QMessageBox.warning(self, "Aucun projet trouvé", "Aucun projet avec des dates valides n'a été trouvé.")
+                self.years_list_widget.clear()
+                return
+
+            years_set = set()
+            
+            for date_debut, date_fin in results:
+                try:
+                    # Extraire les années à partir des dates au format MM/AAAA
+                    debut_annee = int(date_debut.split("/")[1])
+                    fin_annee = int(date_fin.split("/")[1])
+                    
+                    # Ajouter toutes les années entre début et fin (incluses)
+                    for year in range(debut_annee, fin_annee + 1):
+                        years_set.add(year)
+                        
+                except (IndexError, ValueError):
+                    # Si la conversion échoue, on ignore cette entrée
+                    continue
+
+            years = sorted(list(years_set))
+            
+            if not years:
+                QMessageBox.warning(self, "Aucune année trouvée", "Aucune année valide n'a été trouvée dans les projets.")
+                self.years_list_widget.clear()
+                return
+
+            # Remplir la liste des années cochables
+            self.years_list_widget.clear()
+            for year in years:
+                item = QListWidgetItem(str(year))
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self.years_list_widget.addItem(item)
+
+        finally:
+            conn.close()
+
     def update_years_for_selected_projects(self):
         """Met à jour la liste déroulante des années avec les années des projets sélectionnés."""
         # Récupérer les IDs des projets cochés
@@ -370,6 +416,67 @@ class PrintConfigDialog(QDialog):
             self.year_combo.clear()
             for year in years:
                 self.year_combo.addItem(str(year))
+
+        finally:
+            conn.close()
+
+    def update_years_for_selected_projects_multiple(self):
+        """Met à jour la liste des années cochables avec les années des projets sélectionnés."""
+        # Récupérer les IDs des projets cochés
+        selected_project_ids = []
+        for i in range(self.project_list_widget.count()):
+            item = self.project_list_widget.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                selected_project_ids.append(item.data(Qt.ItemDataRole.UserRole))
+        
+        if not selected_project_ids:
+            # Aucun projet sélectionné, vider la liste
+            self.years_list_widget.clear()
+            return
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            # Récupérer les dates des projets sélectionnés
+            placeholders = ','.join('?' * len(selected_project_ids))
+            cursor.execute(f"""
+                SELECT date_debut, date_fin FROM projets 
+                WHERE id IN ({placeholders}) 
+                AND date_debut IS NOT NULL AND date_fin IS NOT NULL
+            """, selected_project_ids)
+            
+            results = cursor.fetchall()
+            
+            if not results:
+                # Ne pas afficher de message d'erreur si aucun projet n'est sélectionné
+                self.years_list_widget.clear()
+                return
+
+            years_set = set()
+            
+            for date_debut, date_fin in results:
+                try:
+                    debut_annee = int(date_debut.split("/")[1])
+                    fin_annee = int(date_fin.split("/")[1])
+                    
+                    for year in range(debut_annee, fin_annee + 1):
+                        years_set.add(year)
+                        
+                except (IndexError, ValueError):
+                    continue
+
+            years = sorted(list(years_set))
+            
+            if not years:
+                self.years_list_widget.clear()
+                return
+
+            # Remplir la liste des années cochables
+            self.years_list_widget.clear()
+            for year in years:
+                item = QListWidgetItem(str(year))
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self.years_list_widget.addItem(item)
 
         finally:
             conn.close()
@@ -630,6 +737,9 @@ class PrintConfigDialog(QDialog):
         if self.radio_multiple_projects.isChecked() and self.period_type.currentIndex() == 0:
             # Mode "Sélection de certains projets" + "Année spécifique"
             self.update_years_for_selected_projects()
+        elif self.radio_multiple_projects.isChecked() and self.period_type.currentIndex() == 1:
+            # Mode "Sélection de certains projets" + "Plusieurs années"
+            self.update_years_for_selected_projects_multiple()
         elif self.radio_by_theme.isChecked() and self.period_type.currentIndex() == 0:
             # Mode "Sélection par thèmes" + "Année spécifique"
             self.update_years_for_selected_themes()
@@ -712,6 +822,11 @@ class PrintConfigDialog(QDialog):
 
     def load_years_with_projects(self):
         """Charge les années où des projets sélectionnés existent depuis la base de données"""
+        # Pour "Tous les projets", récupérer toutes les années de tous les projets
+        if self.radio_all_projects.isChecked():
+            self.update_years_for_all_projects_multiple()
+            return
+            
         project_ids = self.get_selected_project_ids()
         
         if not project_ids:
@@ -819,6 +934,10 @@ class PrintConfigDialog(QDialog):
             # Recharger les années selon le type de sélection
             if self.radio_single_project.isChecked():
                 self.update_years_for_single_project_multiple_years()
+            elif self.radio_all_projects.isChecked():
+                self.update_years_for_all_projects_multiple()
+            elif self.radio_multiple_projects.isChecked():
+                self.update_years_for_selected_projects_multiple()
             elif self.radio_by_theme.isChecked():
                 self.update_years_for_selected_themes_multiple()
             elif self.radio_by_main_theme.isChecked():
@@ -876,7 +995,7 @@ class PrintConfigDialog(QDialog):
 
         # Recharger les années si on est en mode "Plusieurs années" et seulement pour "Tous les projets"
         if self.period_type.currentIndex() == 1 and self.radio_all_projects.isChecked():
-            self.load_years_with_projects()
+            self.update_years_for_all_projects_multiple()
 
     def get_selected_project_id(self):
         """Retourne l'ID du projet sélectionné"""
