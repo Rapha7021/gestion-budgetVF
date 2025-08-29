@@ -354,6 +354,8 @@ class CompteResultatDisplay(QDialog):
             'achats_sous_traitance': 0,
             'autres_achats': 0,
             'cout_direct': 0,
+            'nb_jours_total': 0,
+            'cout_moyen_par_jour': 0,
             'dotation_amortissements': 0,
             
             # CHARGES
@@ -427,6 +429,22 @@ class CompteResultatDisplay(QDialog):
             cursor.execute(query, self.project_ids)
             data['cout_direct'] = cursor.fetchone()[0] or 0
             
+            # Calculer le nombre total de jours
+            query_jours = f"""
+                SELECT COALESCE(SUM(t.jours), 0)
+                FROM temps_travail t
+                WHERE t.annee = {year} {month_condition.replace('mois', 't.mois') if month_condition else ''} 
+                AND t.projet_id IN ({','.join(['?'] * len(self.project_ids))})
+            """
+            cursor.execute(query_jours, self.project_ids)
+            data['nb_jours_total'] = cursor.fetchone()[0] or 0
+            
+            # Calculer le coût moyen par jour
+            if data['nb_jours_total'] > 0:
+                data['cout_moyen_par_jour'] = data['cout_direct'] / data['nb_jours_total']
+            else:
+                data['cout_moyen_par_jour'] = 0
+            
             # Vérification pour debug : si le coût direct est 0, vérifier pourquoi
             if data['cout_direct'] == 0:
                 # Compter les entrées de temps de travail
@@ -455,6 +473,8 @@ class CompteResultatDisplay(QDialog):
                         
         except sqlite3.OperationalError as e:
             data['cout_direct'] = 0
+            data['nb_jours_total'] = 0
+            data['cout_moyen_par_jour'] = 0
         
         # 6. DOTATION AUX AMORTISSEMENTS
         try:
@@ -493,11 +513,11 @@ class CompteResultatDisplay(QDialog):
     def get_cost_type_label(self):
         """Retourne le libellé du type de coût sélectionné"""
         cost_type_mapping = {
-            'montant_charge': 'Montant chargé',
-            'cout_production': 'Coût de production',
-            'cout_complet': 'Coût complet'
+            'montant_charge': 'Salaire (montant chargé)',
+            'cout_production': 'Salaire (coût de production)',
+            'cout_complet': 'Salaire (coût complet)'
         }
-        return cost_type_mapping.get(self.cost_type, 'Coût direct')
+        return cost_type_mapping.get(self.cost_type, 'Salaire (coût direct)')
     
     def generate_filename(self, extension):
         """Génère un nom de fichier basé sur la configuration"""
@@ -727,6 +747,8 @@ class CompteResultatDisplay(QDialog):
             ("Achats et sous-traitance", "achats_sous_traitance"),
             ("Autres achats", "autres_achats"),
             (self.get_cost_type_label(), "cout_direct"),  # Nom dynamique selon le type de coût
+            ("  → Nombre de jours TOTAL", "nb_jours_total"),
+            ("  → Coût moyen par jour", "cout_moyen_par_jour"),
             ("Dotation aux amortissements", "dotation_amortissements"),
             ("CHARGES EXCEPTIONNELLES", "header"),
         ]
@@ -796,18 +818,43 @@ class CompteResultatDisplay(QDialog):
                     # Données simples
                     value = data[period].get(data_key, 0)
                     
-                    item = QTableWidgetItem(f"{value:,.2f}" if value != 0 else "")
+                    # Formatage spécial pour les nouveaux indicateurs
+                    if data_key == "nb_jours_total":
+                        # Afficher le nombre de jours sans décimales
+                        item = QTableWidgetItem(f"{value:.0f} jours" if value != 0 else "")
+                    elif data_key == "cout_moyen_par_jour":
+                        # Afficher le coût moyen par jour avec 2 décimales et €/jour
+                        item = QTableWidgetItem(f"{value:,.2f} €/jour" if value != 0 else "")
+                    else:
+                        # Formatage normal pour les autres données
+                        item = QTableWidgetItem(f"{value:,.2f}" if value != 0 else "")
+                    
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    
+                    # Style spécial pour les indicateurs (légèrement en retrait visuellement)
+                    if data_key in ["nb_jours_total", "cout_moyen_par_jour"]:
+                        item.setForeground(QColor(100, 100, 100))  # Couleur légèrement grisée
+                    
                     self.table.setItem(row, col, item)
             
             # Colonne TOTAL si plusieurs périodes
             if len(data) > 1 and col < self.table.columnCount() - 1:
                 total_value = self.calculate_row_total(data, data_key)
                 if total_value is not None:
-                    item = QTableWidgetItem(f"{total_value:,.2f}" if total_value != 0 else "")
+                    # Formatage spécial pour les nouveaux indicateurs dans la colonne TOTAL
+                    if data_key == "nb_jours_total":
+                        item = QTableWidgetItem(f"{total_value:.0f} jours" if total_value != 0 else "")
+                    elif data_key == "cout_moyen_par_jour":
+                        item = QTableWidgetItem(f"{total_value:,.2f} €/jour" if total_value != 0 else "")
+                    else:
+                        item = QTableWidgetItem(f"{total_value:,.2f}" if total_value != 0 else "")
+                    
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     
-                    if data_key.startswith("total_") or data_key.startswith("resultat_"):
+                    # Style spécial pour les indicateurs
+                    if data_key in ["nb_jours_total", "cout_moyen_par_jour"]:
+                        item.setForeground(QColor(100, 100, 100))
+                    elif data_key.startswith("total_") or data_key.startswith("resultat_"):
                         font = QFont()
                         font.setBold(True)
                         item.setFont(font)
@@ -855,6 +902,15 @@ class CompteResultatDisplay(QDialog):
             for period_data in all_data.values():
                 total += self.calculate_total(period_data, data_key)
             return total
+        elif data_key == "cout_moyen_par_jour":
+            # Pour le coût moyen par jour, recalculer la moyenne globale
+            total_cout = 0
+            total_jours = 0
+            for period_data in all_data.values():
+                total_cout += period_data.get('cout_direct', 0)
+                total_jours += period_data.get('nb_jours_total', 0)
+            
+            return total_cout / total_jours if total_jours > 0 else 0
         else:
             # Pour les données simples, sommer directement
             total = 0
