@@ -14,49 +14,157 @@ class BudgetEditDialog(QDialog):
         # --- Création table recettes si besoin ---
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS recettes (
-                projet_id INTEGER,
-                annee INTEGER,
-                mois TEXT,
-                montant REAL,
-                detail TEXT,
-                PRIMARY KEY (projet_id, annee, mois)
-            )
-        """)
+        
+        # Vérifier la structure actuelle de la table recettes
+        cursor.execute("PRAGMA table_info(recettes)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Si la table a la structure ancienne (avec id et libelle), la migrer
+        if 'id' in column_names and 'libelle' in column_names and 'ligne_index' not in column_names:
+            # Créer la nouvelle table avec la structure correcte
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recettes_new (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    ligne_index INTEGER,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, ligne_index, mois)
+                )
+            """)
+            
+            # Copier les données en assignant des indices de ligne
+            cursor.execute("""
+                INSERT INTO recettes_new (projet_id, annee, ligne_index, mois, montant, detail)
+                SELECT projet_id, annee, 
+                       ROW_NUMBER() OVER (PARTITION BY projet_id, annee ORDER BY id) - 1 as ligne_index,
+                       mois, montant, COALESCE(libelle, '') as detail
+                FROM recettes
+            """)
+            
+            # Supprimer l'ancienne table et renommer la nouvelle
+            cursor.execute("DROP TABLE recettes")
+            cursor.execute("ALTER TABLE recettes_new RENAME TO recettes")
+        elif 'ligne_index' not in column_names:
+            # Créer la table avec la nouvelle structure
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recettes (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    ligne_index INTEGER,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, ligne_index, mois)
+                )
+            """)
+        
         conn.commit()
         conn.close()
-           # --- Création table depenses si besoin ---
+        # --- Création table depenses si besoin ---
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS depenses (
-                projet_id INTEGER,
-                annee INTEGER,
-                mois TEXT,
-                montant REAL,
-                detail TEXT,
-                PRIMARY KEY (projet_id, annee, mois)
-            )
-        """)
+        
+        # Vérifier la structure actuelle de la table depenses
+        cursor.execute("PRAGMA table_info(depenses)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Si la table a la structure ancienne (avec id et libelle), la migrer
+        if 'id' in column_names and 'libelle' in column_names and 'categorie' not in column_names:
+            # Créer la nouvelle table avec la structure correcte
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS depenses_new (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    categorie TEXT,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, categorie, mois)
+                )
+            """)
+            
+            # Copier les données en utilisant libelle comme categorie
+            cursor.execute("""
+                INSERT INTO depenses_new (projet_id, annee, categorie, mois, montant, detail)
+                SELECT projet_id, annee, 
+                       COALESCE(libelle, 'Autres') as categorie,
+                       mois, montant, '' as detail
+                FROM depenses
+            """)
+            
+            # Supprimer l'ancienne table et renommer la nouvelle
+            cursor.execute("DROP TABLE depenses")
+            cursor.execute("ALTER TABLE depenses_new RENAME TO depenses")
+        elif 'categorie' not in column_names:
+            # Créer la table avec la nouvelle structure
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS depenses (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    categorie TEXT,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, categorie, mois)
+                )
+            """)
+        
         conn.commit()
         conn.close()
         # --- Création table autres_depenses si besoin ---
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
         
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS autres_depenses (
-                projet_id INTEGER,
-                annee INTEGER,
-                ligne_index INTEGER,
-                mois TEXT,
-                montant REAL,
-                detail TEXT,
-                PRIMARY KEY (projet_id, annee, ligne_index, mois)
-            )
-        """)
+        # Vérifier la structure actuelle de la table autres_depenses
+        cursor.execute("PRAGMA table_info(autres_depenses)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Si la table a la structure ancienne (avec id et libelle), la migrer
+        if 'id' in column_names and 'libelle' in column_names and 'ligne_index' not in column_names:
+            # Créer la nouvelle table avec la structure correcte
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS autres_depenses_new (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    ligne_index INTEGER,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, ligne_index, mois)
+                )
+            """)
             
+            # Copier les données en assignant des indices de ligne
+            cursor.execute("""
+                INSERT INTO autres_depenses_new (projet_id, annee, ligne_index, mois, montant, detail)
+                SELECT projet_id, annee, 
+                       ROW_NUMBER() OVER (PARTITION BY projet_id, annee ORDER BY id) - 1 as ligne_index,
+                       mois, montant, COALESCE(libelle, '') as detail
+                FROM autres_depenses
+            """)
+            
+            # Supprimer l'ancienne table et renommer la nouvelle
+            cursor.execute("DROP TABLE autres_depenses")
+            cursor.execute("ALTER TABLE autres_depenses_new RENAME TO autres_depenses")
+        elif 'ligne_index' not in column_names:
+            # Créer la table avec la nouvelle structure
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS autres_depenses (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    ligne_index INTEGER,
+                    mois TEXT,
+                    montant REAL,
+                    detail TEXT,
+                    PRIMARY KEY (projet_id, annee, ligne_index, mois)
+                )
+            """)
+        
         conn.commit()
         conn.close()
         super().__init__(parent)
@@ -84,7 +192,7 @@ class BudgetEditDialog(QDialog):
 
         # --- Stockage des valeurs par année ---
         self.budget_data = {}  # {annee: {(direction, categorie, mois): jours}}
-        self.recettes_data = {}  # {annee: {(categorie, mois): (montant, detail)}}
+        self.recettes_data = {}  # {annee: {mois: (montant, detail)}}
         self.depenses_data = {}  # {annee: {(categorie, mois): (montant, detail)}}
         self.autres_depenses_data = {}  # {annee: {(ligne_index, mois): (montant, detail)}}
         self.modified = False  # Pour savoir si des modifs non enregistrées existent
@@ -97,15 +205,6 @@ class BudgetEditDialog(QDialog):
             "Prestations",
             "Frais de fonctionnement",
             "Autres dépenses"
-        ]
-        
-        # Définit les catégories de recettes
-        self.recettes_categories = [
-            "Subventions publiques",
-            "Financement privé", 
-            "Ventes/Prestations",
-            "Partenariats",
-            "Autres recettes"
         ]
 
         # --- Sélection de l'année en haut ---
@@ -362,8 +461,8 @@ class BudgetEditDialog(QDialog):
                 colonnes.extend([f"{mois} - Montant", f"{mois} - Détail"])
 
             table = QTableWidget()
-            # On commence avec le nombre de catégories prédéfinies, mais on pourra ajouter des lignes
-            table.setRowCount(len(self.recettes_categories))
+            # On commence avec une seule ligne, mais on pourra ajouter des lignes
+            table.setRowCount(1)
             table.setColumnCount(len(colonnes))
             table.setHorizontalHeaderLabels(colonnes)
 
@@ -374,12 +473,11 @@ class BudgetEditDialog(QDialog):
                 elif "Détail" in colonnes[col]:
                     table.setColumnWidth(col, 200)
 
-            # Remplit les lignes (une par catégorie, mais sans afficher la catégorie)
-            for row in range(len(self.recettes_categories)):
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(row, col, item_mois)
+            # Remplit la première ligne
+            for col in range(len(colonnes)):
+                item_mois = QTableWidgetItem("")
+                item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, col, item_mois)
 
             # Ajout du bouton pour ajouter une ligne
             btn_add_row = QPushButton("Ajouter une ligne")
@@ -392,7 +490,7 @@ class BudgetEditDialog(QDialog):
             btn_add_row.clicked.connect(add_row)
 
             # Charge systématiquement les données depuis la base et restaure le tableau
-            self.load_recettes_data_from_db_for_year(year, table, colonnes, self.recettes_categories)
+            self.load_recettes_data_from_db_for_year(year, table, colonnes)
 
             # Ajout du contrôle de saisie sur les cellules Montant
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
@@ -422,15 +520,9 @@ class BudgetEditDialog(QDialog):
             
             table = self.recettes_table
             colonnes = self.recettes_colonnes
-            categories = self.recettes_categories
             data = {}
             
             for row in range(table.rowCount()):
-                # Si la ligne correspond à une catégorie prédéfinie, on l'utilise, sinon on génère un nom générique
-                if row < len(categories):
-                    categorie = categories[row]
-                else:
-                    categorie = f"Catégorie {row+1}"
                 col_index = 0
                 while col_index < len(colonnes):
                     if col_index + 1 < len(colonnes):
@@ -445,49 +537,22 @@ class BudgetEditDialog(QDialog):
                         except Exception:
                             montant_val = 0
                         if montant_val != 0 or detail:
-                            key = (categorie, mois)
+                            # Utilise le numéro de ligne comme identifiant unique
+                            key = (row, mois)
                             data[key] = (montant_val, detail)
                     col_index += 2
             
             self.recettes_data[year] = data
 
-        def restore_recettes_table_from_memory(self, year, table, colonnes):
-            """Restaure les valeurs du tableau recettes à partir de la mémoire pour l'année donnée"""
-            data = self.recettes_data.get(year, {})
-            categories = self.recettes_categories
-            
-            for row in range(table.rowCount()):
-                if row < len(categories):
-                    categorie = categories[row]
-                else:
-                    categorie = f"Catégorie {row+1}"
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois = col_montant_name.split(" - ")[0]
-                        key = (categorie, mois)
-                        montant, detail = data.get(key, (0, ""))
-                        montant_item = table.item(row, col_index)
-                        detail_item = table.item(row, col_index + 1)
-                        if montant_item and detail_item:
-                            table.blockSignals(True)
-                            if montant != 0:
-                                montant_item.setText(str(montant))
-                            else:
-                                montant_item.setText("")
-                            detail_item.setText(detail)
-                            table.blockSignals(False)
-                    col_index += 2
-
-        def load_recettes_data_from_db_for_year(self, year, table, colonnes, categories):
+        def load_recettes_data_from_db_for_year(self, year, table, colonnes):
             """Charge les données des recettes depuis la base pour une année spécifique et les met dans le tableau"""
             conn = sqlite3.connect('gestion_budget.db')
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT categorie, mois, montant, detail 
+                SELECT ligne_index, mois, montant, detail 
                 FROM recettes 
                 WHERE projet_id=? AND annee=?
+                ORDER BY ligne_index, mois
             """, (self.projet_id, int(year)))
             rows = cursor.fetchall()
             conn.close()
@@ -496,30 +561,30 @@ class BudgetEditDialog(QDialog):
                 return
 
             # Met les données dans le tableau
-            for categorie, mois, montant, detail in rows:
-                found = False
-                for row in range(table.rowCount()):
-                    if row < len(categories):
-                        cat_row = categories[row]
-                    else:
-                        cat_row = f"Catégorie {row+1}"
-                    if cat_row == categorie:
-                        col_index = 0
-                        while col_index < len(colonnes):
-                            if col_index + 1 < len(colonnes):
-                                col_montant_name = colonnes[col_index]
-                                mois_col = col_montant_name.split(" - ")[0]
-                                if mois_col == mois:
-                                    table.blockSignals(True)
-                                    if montant:
-                                        table.item(row, col_index).setText(str(montant))
-                                    if detail:
-                                        table.item(row, col_index + 1).setText(detail)
-                                    table.blockSignals(False)
-                                    break
-                            col_index += 2
-                        found = True
-                        break
+            # D'abord on s'assure qu'on a assez de lignes
+            max_ligne_index = max(row[0] for row in rows) if rows else 0
+            while table.rowCount() <= max_ligne_index:
+                table.insertRow(table.rowCount())
+                for col in range(len(colonnes)):
+                    item_mois = QTableWidgetItem("")
+                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(table.rowCount()-1, col, item_mois)
+
+            for ligne_index, mois, montant, detail in rows:
+                col_index = 0
+                while col_index < len(colonnes):
+                    if col_index + 1 < len(colonnes):
+                        col_montant_name = colonnes[col_index]
+                        mois_col = col_montant_name.split(" - ")[0]
+                        if mois_col == mois:
+                            table.blockSignals(True)
+                            if montant:
+                                table.item(ligne_index, col_index).setText(str(montant))
+                            if detail:
+                                table.item(ligne_index, col_index + 1).setText(detail)
+                            table.blockSignals(False)
+                            break
+                    col_index += 2
 
         # Affecte les méthodes à l'instance
         self.save_recettes_table_to_memory = save_recettes_table_to_memory.__get__(self)
@@ -880,7 +945,8 @@ class BudgetEditDialog(QDialog):
                 cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_recettes_year)))
                 for key, (montant, detail) in self.recettes_data.get(self.current_recettes_year, {}).items():
                     if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                        cursor.execute("INSERT INTO recettes (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_recettes_year), *key, montant or 0, detail or ""))
+                        ligne_index, mois = key
+                        cursor.execute("INSERT INTO recettes (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_recettes_year), ligne_index, mois, montant or 0, detail or ""))
                 conn.commit()
                 conn.close()
                 self.recettes_modified = False

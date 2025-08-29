@@ -57,15 +57,48 @@ class TaskManagerDialog(QDialog):
         self.table.setRowCount(0)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            projet_id INTEGER,
-            nom TEXT,
-            date_debut TEXT,
-            date_fin TEXT,
-            details TEXT,
-            pourcentage_budget REAL
-        )''')
+        
+        # Vérifier la structure actuelle de la table taches
+        cursor.execute("PRAGMA table_info(taches)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Si la table a la structure ancienne, la migrer
+        if 'description' in column_names and 'details' not in column_names:
+            # Créer la nouvelle table avec la structure correcte
+            cursor.execute('''CREATE TABLE IF NOT EXISTS taches_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                projet_id INTEGER,
+                nom TEXT,
+                date_debut TEXT,
+                date_fin TEXT,
+                details TEXT,
+                pourcentage_budget REAL
+            )''')
+            
+            # Copier les données en renommant description en details et ajoutant pourcentage_budget
+            cursor.execute("""
+                INSERT INTO taches_new (id, projet_id, nom, date_debut, date_fin, details, pourcentage_budget)
+                SELECT id, projet_id, nom, date_debut, date_fin, 
+                       COALESCE(description, '') as details, 0 as pourcentage_budget
+                FROM taches
+            """)
+            
+            # Supprimer l'ancienne table et renommer la nouvelle
+            cursor.execute("DROP TABLE taches")
+            cursor.execute("ALTER TABLE taches_new RENAME TO taches")
+        elif 'details' not in column_names or 'pourcentage_budget' not in column_names:
+            # Créer la table avec la nouvelle structure
+            cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                projet_id INTEGER,
+                nom TEXT,
+                date_debut TEXT,
+                date_fin TEXT,
+                details TEXT,
+                pourcentage_budget REAL
+            )''')
+        
         cursor.execute('SELECT id, nom, date_debut, date_fin, details, pourcentage_budget FROM taches WHERE projet_id=?', (self.projet_id,))
         self.task_ids = []
         for row_idx, (id_, nom, date_debut, date_fin, details, pourcentage_budget) in enumerate(cursor.fetchall()):

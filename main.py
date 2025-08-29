@@ -21,7 +21,7 @@ def get_equipe_categories():
     cursor = conn.cursor()
     
     cursor.execute('''SELECT DISTINCT libelle FROM categorie_cout WHERE libelle IS NOT NULL AND libelle != '' ORDER BY libelle''')
-    categories = [row[0] for row in cursor.fetchall()]
+    categories = [row[0] for row in cursor.fetchall() if row[0] and row[0].strip()]  # Filtrer les chaînes vides et les espaces
     conn.close()
     
     # Si aucune catégorie n'existe, retourner les catégories par défaut
@@ -35,6 +35,9 @@ def get_equipe_categories():
             'Expert',
             'Collaborateur moyen'
         ]
+    
+    # Filtrer encore une fois pour être sûr qu'aucune chaîne vide ne passe
+    categories = [cat for cat in categories if cat and cat.strip()]
     
     return categories
 
@@ -97,8 +100,21 @@ def init_db():
         coef_dotation_amortissements REAL,
         cd REAL,
         taux REAL,
+        depenses_eligibles_max REAL DEFAULT 0,
+        montant_subvention_max REAL DEFAULT 0,
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
+    
+    # Migration pour ajouter les nouvelles colonnes si elles n'existent pas
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN depenses_eligibles_max REAL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_subvention_max REAL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
@@ -134,6 +150,80 @@ def init_db():
         cout_production REAL,
         cout_complet REAL
     )''')
+    
+    # Tables pour la gestion du budget et des temps de travail
+    cursor.execute('''CREATE TABLE IF NOT EXISTS temps_travail (
+        projet_id INTEGER,
+        annee INTEGER,
+        direction TEXT,
+        categorie TEXT,
+        mois TEXT,
+        jours REAL,
+        PRIMARY KEY (projet_id, annee, direction, categorie, mois),
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS depenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        annee INTEGER,
+        mois TEXT,
+        libelle TEXT,
+        montant REAL,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS autres_depenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        annee INTEGER,
+        mois TEXT,
+        libelle TEXT,
+        montant REAL,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS recettes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        annee INTEGER,
+        mois TEXT,
+        libelle TEXT,
+        montant REAL,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        nom TEXT NOT NULL,
+        description TEXT,
+        date_debut TEXT,
+        date_fin TEXT,
+        statut TEXT,
+        responsable TEXT,
+        FOREIGN KEY(projet_id) REFERENCES projets(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS amortissements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        projet_id INTEGER,
+        investissement_id INTEGER,
+        annee INTEGER,
+        mois TEXT,
+        montant REAL,
+        FOREIGN KEY(projet_id) REFERENCES projets(id),
+        FOREIGN KEY(investissement_id) REFERENCES investissements(id)
+    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS cir_coeffs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        annee INTEGER UNIQUE,
+        k1 REAL,
+        k2 REAL,
+        k3 REAL
+    )''')
+    
     conn.commit()
     conn.close()
 
@@ -509,6 +599,8 @@ class ProjectForm(QDialog):
         equipe_vbox.addWidget(QLabel('Direction :'))
         equipe_vbox.addWidget(self.direction_combo)
         self.equipe_types_labels = get_equipe_categories()
+        # Filtrer les labels vides par sécurité
+        self.equipe_types_labels = [label for label in self.equipe_types_labels if label and label.strip()]
         self.equipe_spins = {}
         self.equipe_form = QFormLayout()
         for label in self.equipe_types_labels:
@@ -906,16 +998,27 @@ class ProjectForm(QDialog):
             if self.projet_id:
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                cursor.execute('''INSERT INTO subventions 
-                    (projet_id, nom, depenses_temps_travail, coef_temps_travail, 
-                     depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
-                     depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                     depenses_eligibles_max, montant_subvention_max) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                    (self.projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
-                     data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
-                     data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
-                     data['depenses_eligibles_max'], data['montant_subvention_max']))
+                try:
+                    cursor.execute('''INSERT INTO subventions 
+                        (projet_id, nom, depenses_temps_travail, coef_temps_travail, 
+                         depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                         depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                         depenses_eligibles_max, montant_subvention_max) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (self.projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                         data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                         data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
+                         data['depenses_eligibles_max'], data['montant_subvention_max']))
+                except sqlite3.OperationalError:
+                    # Fallback pour les anciennes bases de données sans les nouvelles colonnes
+                    cursor.execute('''INSERT INTO subventions 
+                        (projet_id, nom, depenses_temps_travail, coef_temps_travail, 
+                         depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                         depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (self.projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                         data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                         data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux']))
                 conn.commit()
                 conn.close()
             
@@ -987,16 +1090,27 @@ class ProjectForm(QDialog):
                 subv_ids = [r[0] for r in cursor.fetchall()]
                 if row < len(subv_ids):
                     subv_id = subv_ids[row]
-                    cursor.execute('''UPDATE subventions SET 
-                        nom=?, depenses_temps_travail=?, coef_temps_travail=?, 
-                        depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
-                        depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
-                        depenses_eligibles_max=?, montant_subvention_max=? 
-                        WHERE id=?''',
-                        (data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
-                         data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
-                         data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
-                         data['depenses_eligibles_max'], data['montant_subvention_max'], subv_id))
+                    try:
+                        cursor.execute('''UPDATE subventions SET 
+                            nom=?, depenses_temps_travail=?, coef_temps_travail=?, 
+                            depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
+                            depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
+                            depenses_eligibles_max=?, montant_subvention_max=? 
+                            WHERE id=?''',
+                            (data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                             data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                             data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
+                             data['depenses_eligibles_max'], data['montant_subvention_max'], subv_id))
+                    except sqlite3.OperationalError:
+                        # Fallback pour les anciennes bases de données sans les nouvelles colonnes
+                        cursor.execute('''UPDATE subventions SET 
+                            nom=?, depenses_temps_travail=?, coef_temps_travail=?, 
+                            depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
+                            depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?
+                            WHERE id=?''',
+                            (data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                             data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
+                             data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], subv_id))
                 conn.commit()
                 conn.close()
             
@@ -1014,7 +1128,9 @@ class ProjectForm(QDialog):
         # Sauvegarder les valeurs de la direction courante avant la sauvegarde
         if hasattr(self, '_current_direction') and self._current_direction is not None:
             for label in self.equipe_types_labels:
-                self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+                # Vérifier que le label n'est pas vide et existe dans les dictionnaires
+                if label and label in self.equipe_spins and self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
+                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
         
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -1165,32 +1281,63 @@ class ProjectForm(QDialog):
         # Subventions liées
         self.subv_list.clear()
         self.subventions_data = []
-        cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max FROM subventions WHERE projet_id=?', (self.projet_id,))
-        for subv in cursor.fetchall():
-            data = {
-                'depenses_temps_travail': subv[0],
-                'coef_temps_travail': subv[1],
-                'depenses_externes': subv[2],
-                'coef_externes': subv[3],
-                'depenses_autres_achats': subv[4],
-                'coef_autres_achats': subv[5],
-                'depenses_dotation_amortissements': subv[6],
-                'coef_dotation_amortissements': subv[7],
-                'cd': subv[8],
-                'taux': subv[9],
-                'nom': subv[10],
-                'depenses_eligibles_max': subv[11] if len(subv) > 11 else 0,
-                'montant_subvention_max': subv[12] if len(subv) > 12 else 0
-            }
-            self.subventions_data.append(data)
-            cats = []
-            if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
-            if subv[2]: cats.append(f"Externes (coef {subv[3]})")
-            if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
-            if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
-            nom = subv[10] if subv[10] else "Sans nom"
-            subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
-            self.subv_list.addItem(subv_str)
+        
+        # Essayer d'abord avec les nouvelles colonnes, puis fallback sans elles
+        try:
+            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max FROM subventions WHERE projet_id=?', (self.projet_id,))
+            for subv in cursor.fetchall():
+                data = {
+                    'depenses_temps_travail': subv[0],
+                    'coef_temps_travail': subv[1],
+                    'depenses_externes': subv[2],
+                    'coef_externes': subv[3],
+                    'depenses_autres_achats': subv[4],
+                    'coef_autres_achats': subv[5],
+                    'depenses_dotation_amortissements': subv[6],
+                    'coef_dotation_amortissements': subv[7],
+                    'cd': subv[8],
+                    'taux': subv[9],
+                    'nom': subv[10],
+                    'depenses_eligibles_max': subv[11] if len(subv) > 11 else 0,
+                    'montant_subvention_max': subv[12] if len(subv) > 12 else 0
+                }
+                self.subventions_data.append(data)
+                cats = []
+                if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
+                if subv[2]: cats.append(f"Externes (coef {subv[3]})")
+                if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
+                if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
+                nom = subv[10] if subv[10] else "Sans nom"
+                subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
+                self.subv_list.addItem(subv_str)
+        except sqlite3.OperationalError:
+            # Fallback pour les anciennes bases de données sans les nouvelles colonnes
+            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom FROM subventions WHERE projet_id=?', (self.projet_id,))
+            for subv in cursor.fetchall():
+                data = {
+                    'depenses_temps_travail': subv[0],
+                    'coef_temps_travail': subv[1],
+                    'depenses_externes': subv[2],
+                    'coef_externes': subv[3],
+                    'depenses_autres_achats': subv[4],
+                    'coef_autres_achats': subv[5],
+                    'depenses_dotation_amortissements': subv[6],
+                    'coef_dotation_amortissements': subv[7],
+                    'cd': subv[8],
+                    'taux': subv[9],
+                    'nom': subv[10],
+                    'depenses_eligibles_max': 0,  # Valeur par défaut
+                    'montant_subvention_max': 0   # Valeur par défaut
+                }
+                self.subventions_data.append(data)
+                cats = []
+                if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
+                if subv[2]: cats.append(f"Externes (coef {subv[3]})")
+                if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
+                if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
+                nom = subv[10] if subv[10] else "Sans nom"
+                subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
+                self.subv_list.addItem(subv_str)
             
         # Initialiser self.equipe_data avec des valeurs par défaut pour toutes les directions
         self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}

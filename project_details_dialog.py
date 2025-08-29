@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayo
 from PyQt6.QtCore import Qt
 import sqlite3
 import os
+import datetime
 DB_PATH = 'gestion_budget.db'
 
 class ProjectDetailsDialog(QDialog):
