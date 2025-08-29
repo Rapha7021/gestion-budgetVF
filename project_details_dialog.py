@@ -522,7 +522,7 @@ class ProjectDetailsDialog(QDialog):
                 
                 # Ajouter un séparateur et afficher l'assiette éligible CIR
                 self.budget_vbox.addWidget(QLabel(""))
-                cir_label = QLabel(f"<b>CIR ({taux_k3_percent:.0f}%) : {montant_net_eligible:,.2f} €</b>".replace(",", " "))
+                cir_label = QLabel(f"Assiette éligible \"CIR\" : {montant_net_eligible:,.2f} € (taux : {taux_k3_percent:.0f} %)".replace(",", " "))
                 self.budget_vbox.addWidget(cir_label)
 
     def refresh_budget(self):
@@ -669,10 +669,12 @@ class ProjectDetailsDialog(QDialog):
                 total_subventions += montant
 
                 # Afficher l'assiette éligible (plafonnée) avec le taux
-                subv_label = QLabel(f"{nom} ({taux:.0f}%) : {assiette_eligible:,.2f} €".replace(",", " "))
+                subv_label = QLabel(f"Assiette éligible \"{nom}\" : {assiette_eligible:,.2f} € (taux : {taux:.0f} %)".replace(",", " "))
                 self.budget_vbox.addWidget(subv_label)
 
             # Calculer et afficher le CIR si le projet l'a activé
             if self.has_cir_activated():
+                # Ajouter un séparateur entre subventions et CIR
+                self.budget_vbox.addWidget(QLabel("─" * 40))  # Trait de séparation
                 self.refresh_cir(total_subventions)
 
