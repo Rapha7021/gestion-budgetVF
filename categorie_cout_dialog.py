@@ -95,6 +95,7 @@ class CategorieCoutDialog(QDialog):
 
         self.table.cellChanged.connect(self.mark_dirty)
         self.table.cellChanged.connect(self.validate_category_code)
+        self.table.cellChanged.connect(self.auto_save)  # Sauvegarde automatique
         self.table.installEventFilter(self)
 
         self.setLayout(main_layout)
@@ -344,6 +345,18 @@ class CategorieCoutDialog(QDialog):
         if not getattr(self, '_loading', False) and column in [0, 1, 2, 3, 4]:
             self._dirty = True
     
+    def auto_save(self, row, column):
+        """Sauvegarde automatique après modification d'une cellule"""
+        if not getattr(self, '_loading', False) and column in [2, 3, 4]:  # Seulement pour les montants
+            # Délai court pour permettre à l'utilisateur de finir sa saisie
+            from PyQt6.QtCore import QTimer
+            if not hasattr(self, '_auto_save_timer'):
+                self._auto_save_timer = QTimer()
+                self._auto_save_timer.setSingleShot(True)
+                self._auto_save_timer.timeout.connect(lambda: self.save_data(show_message=False))
+            self._auto_save_timer.stop()
+            self._auto_save_timer.start(1000)  # Sauvegarde après 1 seconde d'inactivité
+    
     def validate_category_code(self, row, column):
         """Valide et formate le code de catégorie (colonne 0)"""
         if column == 0 and not getattr(self, '_loading', False):
@@ -407,9 +420,12 @@ class CategorieCoutDialog(QDialog):
                         # Continuer avec la logique normale pour cette année
                     # Si Non, on continue avec la logique normale qui ne mettra à jour que cette année
                 
-                # Récupérer les valeurs existantes avec l'ancien code
-                cursor.execute('''SELECT id, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, original_code))
+                # Récupérer les valeurs existantes - utiliser le code actuel après changement éventuel
+                search_code = current_code if code_changed else original_code
+                cursor.execute('''SELECT id, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, search_code))
                 res = cursor.fetchone()
+                
+                # Préparer les champs à mettre à jour
                 update_fields = {}
                 
                 # Toujours inclure le libellé
@@ -425,34 +441,45 @@ class CategorieCoutDialog(QDialog):
                     try:
                         update_fields['montant_charge'] = float(val.text().replace(',', '.'))
                     except Exception:
-                        pass  # Ignore les erreurs de conversion
+                        update_fields['montant_charge'] = None
+                else:
+                    update_fields['montant_charge'] = None
+                    
                 # Coût de production
                 val = self.table.item(i, 3)
                 if val and val.text().strip():
                     try:
                         update_fields['cout_production'] = float(val.text().replace(',', '.'))
                     except Exception:
-                        pass
+                        update_fields['cout_production'] = None
+                else:
+                    update_fields['cout_production'] = None
+                    
                 # Coût complet
                 val = self.table.item(i, 4)
                 if val and val.text().strip():
                     try:
                         update_fields['cout_complet'] = float(val.text().replace(',', '.'))
                     except Exception:
-                        pass
+                        update_fields['cout_complet'] = None
+                else:
+                    update_fields['cout_complet'] = None
                         
                 if res:
                     # Mise à jour de l'enregistrement existant
                     set_clause = ', '.join([f"{k}=?" for k in update_fields.keys()])
-                    if set_clause:
-                        sql = f"UPDATE categorie_cout SET {set_clause} WHERE id=?"
-                        cursor.execute(sql, list(update_fields.values()) + [res[0]])
-                elif update_fields:
-                    # Insertion d'un nouvel enregistrement
+                    sql = f"UPDATE categorie_cout SET {set_clause} WHERE id=?"
+                    cursor.execute(sql, list(update_fields.values()) + [res[0]])
+                else:
+                    # Insertion d'un nouvel enregistrement - toujours inclure tous les champs
+                    update_fields['annee'] = year
+                    update_fields['categorie'] = current_code
+                    
                     fields = ', '.join(update_fields.keys())
                     placeholders = ', '.join(['?'] * len(update_fields))
-                    sql = f"INSERT INTO categorie_cout (annee, {fields}) VALUES (?, {placeholders})"
-                    cursor.execute(sql, [year] + list(update_fields.values()))
+                    sql = f"INSERT INTO categorie_cout ({fields}) VALUES ({placeholders})"
+                    cursor.execute(sql, list(update_fields.values()))
+        
         conn.commit()
         conn.close()
         if show_message:
