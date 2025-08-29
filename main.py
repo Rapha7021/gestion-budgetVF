@@ -15,6 +15,29 @@ import pandas as pd  # Ajout pour lecture Excel
 
 DB_PATH = 'gestion_budget.db'
 
+def get_equipe_categories():
+    """Récupère les catégories d'équipe depuis la table categorie_cout"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute('''SELECT DISTINCT libelle FROM categorie_cout WHERE libelle IS NOT NULL AND libelle != '' ORDER BY libelle''')
+    categories = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    # Si aucune catégorie n'existe, retourner les catégories par défaut
+    if not categories:
+        categories = [
+            'Stagiaire Projet',
+            'Assistante / opérateur',
+            'Technicien',
+            'Junior',
+            'Senior',
+            'Expert',
+            'Collaborateur moyen'
+        ]
+    
+    return categories
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -101,6 +124,15 @@ def init_db():
         prenom TEXT NOT NULL,
         direction TEXT NOT NULL,
         FOREIGN KEY(direction) REFERENCES directions(nom)
+    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS categorie_cout (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        annee INTEGER,
+        categorie TEXT,
+        libelle TEXT,
+        montant_charge REAL,
+        cout_production REAL,
+        cout_complet REAL
     )''')
     conn.commit()
     conn.close()
@@ -468,23 +500,15 @@ class ProjectForm(QDialog):
         self.direction_combo.addItems(self.directions)
         equipe_vbox.addWidget(QLabel('Direction :'))
         equipe_vbox.addWidget(self.direction_combo)
-        self.equipe_types_labels = [
-            'Stagiaire Projet',
-            'Assistante / opérateur',
-            'Technicien',
-            'Junior',
-            'Senior',
-            'Expert',
-            'Collaborateur moyen'
-        ]
+        self.equipe_types_labels = get_equipe_categories()
         self.equipe_spins = {}
-        equipe_form = QFormLayout()
+        self.equipe_form = QFormLayout()
         for label in self.equipe_types_labels:
             spin = QSpinBox()
             spin.setRange(0, 99)
             self.equipe_spins[label] = spin
-            equipe_form.addRow(label, spin)
-        equipe_vbox.addLayout(equipe_form)
+            self.equipe_form.addRow(label, spin)
+        equipe_vbox.addLayout(self.equipe_form)
         equipe_group.setLayout(equipe_vbox)
         grid.addWidget(equipe_group, row, 2, 3, 2)  # Côté droit, sur 3 rangées
         row += 3
@@ -530,6 +554,10 @@ class ProjectForm(QDialog):
         self.date_debut.dateChanged.connect(self.check_form_valid)
         self.date_fin.dateChanged.connect(self.check_form_valid)
         self.check_form_valid()
+        
+        # Rafraîchir les catégories d'équipe au cas où de nouvelles auraient été ajoutées
+        self.refresh_equipe_categories()
+        
         # Charger les données du projet si modification
         if self.projet_id:
             self.load_project_data()
@@ -560,6 +588,66 @@ class ProjectForm(QDialog):
         for chef_id, nom, prenom, direction in cursor.fetchall():
             self.chef_combo.addItem(f"{nom} {prenom} - {direction}", chef_id)
         conn.close()
+
+    def refresh_equipe_categories(self):
+        """Rafraîchit les catégories d'équipe depuis la base de données"""
+        new_categories = get_equipe_categories()
+        
+        # Si les catégories ont changé, reconstruire l'interface équipe
+        if new_categories != self.equipe_types_labels:
+            # Sauvegarder les données actuelles avant de reconstruire
+            if hasattr(self, '_current_direction') and self._current_direction is not None:
+                for label in self.equipe_types_labels:
+                    if label in self.equipe_spins:
+                        self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+            
+            # Mettre à jour les catégories
+            old_labels = set(self.equipe_types_labels)
+            self.equipe_types_labels = new_categories
+            new_labels = set(self.equipe_types_labels)
+            
+            # Mettre à jour equipe_data pour toutes les directions
+            for direction in self.directions:
+                old_data = self.equipe_data.get(direction, {})
+                new_data = {}
+                for label in self.equipe_types_labels:
+                    # Conserver les valeurs existantes si la catégorie existait déjà
+                    new_data[label] = old_data.get(label, 0)
+                self.equipe_data[direction] = new_data
+            
+            # Reconstruire les spinboxes
+            self.rebuild_equipe_form()
+
+    def rebuild_equipe_form(self):
+        """Reconstruit le formulaire équipe avec les nouvelles catégories"""
+        # Trouver le QFormLayout existant et le vider
+        for i in range(self.equipe_form.count()):
+            child = self.equipe_form.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        
+        # Recréer les spinboxes
+        self.equipe_spins = {}
+        for label in self.equipe_types_labels:
+            spin = QSpinBox()
+            spin.setRange(0, 99)
+            self.equipe_spins[label] = spin
+            self.equipe_form.addRow(QLabel(label + ':'), spin)
+            
+            # Reconnecter les callbacks
+            def make_callback(label_name):
+                def callback(value):
+                    self.on_equipe_spin_changed(label_name, value)
+                return callback
+            
+            spin.valueChanged.connect(make_callback(label))
+        
+        # Restaurer les valeurs pour la direction courante
+        if hasattr(self, '_current_direction') and self._current_direction is not None:
+            for label in self.equipe_types_labels:
+                if label in self.equipe_spins:
+                    value = self.equipe_data[self._current_direction].get(label, 0)
+                    self.equipe_spins[label].setValue(value)
 
     def on_direction_changed(self, direction):
         # Sauvegarde les valeurs courantes dans la direction précédente
