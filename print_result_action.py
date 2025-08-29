@@ -13,10 +13,7 @@ class PrintConfigDialog(QDialog):
         self.projet_id = projet_id
         self.setWindowTitle("Configuration du Compte de Résultat")
         self.setMinimumSize(600, 700)
-
         layout = QVBoxLayout()
-
-    
 
         # Sélection du projet
         project_group = QGroupBox("Sélection du projet")

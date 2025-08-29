@@ -33,8 +33,7 @@ def import_project_from_excel(form):
         "code_edit": ("Projet", str),
         "date_debut": ("Date Deb", str),
         "date_fin": ("Date Fin", str),
-        "details_edit": ("Description", str),
-        "chef_edit": ("Cdp", str)  # Ajout chef de projet
+        "details_edit": ("Description", str)
     }
     for attr, (col, typ) in mapping.items():
         widget = getattr(form, attr)
