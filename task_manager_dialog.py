@@ -63,8 +63,15 @@ class TaskManagerDialog(QDialog):
         columns = cursor.fetchall()
         column_names = [col[1] for col in columns]
         
-        # Si la table a la structure ancienne, la migrer
+        # Migration nécessaire si on a l'ancienne structure
+        needs_migration = False
         if 'description' in column_names and 'details' not in column_names:
+            needs_migration = True
+        elif 'pourcentage_budget' not in column_names:
+            needs_migration = True
+            
+        if needs_migration:
+            print("Migration de la base de données en cours...")
             # Créer la nouvelle table avec la structure correcte
             cursor.execute('''CREATE TABLE IF NOT EXISTS taches_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,31 +80,32 @@ class TaskManagerDialog(QDialog):
                 date_debut TEXT,
                 date_fin TEXT,
                 details TEXT,
-                pourcentage_budget REAL
+                pourcentage_budget REAL DEFAULT 0
             )''')
             
-            # Copier les données en renommant description en details et ajoutant pourcentage_budget
-            cursor.execute("""
-                INSERT INTO taches_new (id, projet_id, nom, date_debut, date_fin, details, pourcentage_budget)
-                SELECT id, projet_id, nom, date_debut, date_fin, 
-                       COALESCE(description, '') as details, 0 as pourcentage_budget
-                FROM taches
-            """)
+            # Copier les données existantes
+            if 'description' in column_names:
+                # Migration depuis l'ancienne structure avec description
+                cursor.execute("""
+                    INSERT INTO taches_new (id, projet_id, nom, date_debut, date_fin, details, pourcentage_budget)
+                    SELECT id, projet_id, nom, date_debut, date_fin, 
+                           COALESCE(description, '') as details, 0 as pourcentage_budget
+                    FROM taches
+                """)
+            else:
+                # Migration pour ajouter seulement pourcentage_budget
+                cursor.execute("""
+                    INSERT INTO taches_new (id, projet_id, nom, date_debut, date_fin, details, pourcentage_budget)
+                    SELECT id, projet_id, nom, date_debut, date_fin, 
+                           COALESCE(details, '') as details, 0 as pourcentage_budget
+                    FROM taches
+                """)
             
             # Supprimer l'ancienne table et renommer la nouvelle
             cursor.execute("DROP TABLE taches")
             cursor.execute("ALTER TABLE taches_new RENAME TO taches")
-        elif 'details' not in column_names or 'pourcentage_budget' not in column_names:
-            # Créer la table avec la nouvelle structure
-            cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                projet_id INTEGER,
-                nom TEXT,
-                date_debut TEXT,
-                date_fin TEXT,
-                details TEXT,
-                pourcentage_budget REAL
-            )''')
+            conn.commit()
+            print("Migration terminée avec succès.")
         
         cursor.execute('SELECT id, nom, date_debut, date_fin, details, pourcentage_budget FROM taches WHERE projet_id=?', (self.projet_id,))
         self.task_ids = []
