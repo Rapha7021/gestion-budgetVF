@@ -325,35 +325,6 @@ class BudgetEditDialog(QDialog):
             self.colonnes_budget = colonnes
             self.directions_budget = directions
 
-            # Ajout du bouton Enregistrer
-            btn_save = QPushButton("Enregistrer")
-            def save_to_db():
-                self.save_table_to_memory(year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                # Efface les anciennes valeurs pour ce projet et cette année
-                cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(year)))
-                # Insère toutes les valeurs de l'année
-                for key, jours in self.budget_data.get(year, {}).items():
-                    row_index, mois = key
-                    # Récupère direction et catégorie depuis le tableau
-                    current_direction = None
-                    for r in range(row_index + 1):
-                        if r in self.direction_rows:
-                            current_direction = self.table_budget.item(r, 0).text()
-                    categorie = self.table_budget.item(row_index, 0).text()
-                    
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO temps_travail (projet_id, annee, direction, categorie, mois, jours)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (self.projet_id, int(year), current_direction, categorie, mois, jours))
-                conn.commit()
-                conn.close()
-                self.modified = False
-                QMessageBox.information(self, "Enregistrement", "Les données ont été enregistrées.")
-            btn_save.clicked.connect(save_to_db)
-            self.temps_layout.addWidget(btn_save)
-
 
 
         # Initialisation du tableau pour l'année sélectionnée
@@ -443,29 +414,6 @@ class BudgetEditDialog(QDialog):
             self.recettes_layout.addWidget(aide_label)
             self.recettes_table = table
             self.recettes_colonnes = colonnes
-
-            # Ajout du bouton Enregistrer
-            btn_save = QPushButton("Enregistrer")
-            def save_recettes_to_db():
-                self.save_recettes_table_to_memory(year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                # Efface les anciennes valeurs pour ce projet et cette année
-                cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(year)))
-                # Insère toutes les valeurs de l'année
-                for key, (montant, detail) in self.recettes_data.get(year, {}).items():
-                    categorie, mois = key
-                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                        cursor.execute("""
-                            INSERT INTO recettes (projet_id, annee, categorie, mois, montant, detail)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (self.projet_id, int(year), categorie, mois, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.recettes_modified = False
-                QMessageBox.information(self, "Enregistrement", "Les recettes ont été enregistrées.")
-            btn_save.clicked.connect(save_recettes_to_db)
-            self.recettes_layout.addWidget(btn_save)
 
         def save_recettes_table_to_memory(self, year):
             """Sauvegarde les valeurs du tableau recettes en mémoire pour l'année donnée"""
@@ -652,26 +600,6 @@ class BudgetEditDialog(QDialog):
             self.depenses_table = table
             self.depenses_colonnes = colonnes
 
-            btn_save = QPushButton("Enregistrer")
-            def save_depenses_to_db():
-                self.save_depenses_table_to_memory(year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(year)))
-                for key, (montant, detail) in self.depenses_data.get(year, {}).items():
-                    categorie, mois = key
-                    if montant or detail:
-                        cursor.execute("""
-                            INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (self.projet_id, int(year), categorie, mois, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.depenses_modified = False
-                QMessageBox.information(self, "Enregistrement", "Les dépenses ont été enregistrées.")
-            btn_save.clicked.connect(save_depenses_to_db)
-            self.depenses_layout.addWidget(btn_save)
-
         def save_depenses_table_to_memory(self, year):
             if not hasattr(self, 'depenses_table') or not hasattr(self, 'depenses_colonnes'):
                 return
@@ -813,26 +741,6 @@ class BudgetEditDialog(QDialog):
             self.autres_depenses_table = table
             self.autres_depenses_colonnes = colonnes
 
-            btn_save = QPushButton("Enregistrer")
-            def save_autres_depenses_to_db():
-                self.save_autres_depenses_table_to_memory(year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(year)))
-                for key, (montant, detail) in self.autres_depenses_data.get(year, {}).items():
-                    ligne_index, mois = key
-                    if montant or detail:
-                        cursor.execute("""
-                            INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (self.projet_id, int(year), ligne_index, mois, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.autres_depenses_modified = False
-                QMessageBox.information(self, "Enregistrement", "Les autres dépenses ont été enregistrées.")
-            btn_save.clicked.connect(save_autres_depenses_to_db)
-            self.autres_depenses_layout.addWidget(btn_save)
-
         def save_autres_depenses_table_to_memory(self, year):
             if not hasattr(self, 'autres_depenses_table') or not hasattr(self, 'autres_depenses_colonnes'):
                 return
@@ -934,6 +842,76 @@ class BudgetEditDialog(QDialog):
         self.update_button_styles(0)
 
         self.setLayout(main_layout)
+
+        # --- Ajout d'un bouton Enregistrer global ---
+        btn_save_all = QPushButton("Enregistrer tout")
+        main_layout.addWidget(btn_save_all)
+
+        def save_all_to_db():
+            # Sauvegarde les données de toutes les pages
+            if hasattr(self, 'current_year'):
+                self.save_table_to_memory(self.current_year)
+                conn = sqlite3.connect('gestion_budget.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_year)))
+                
+                # Pour le temps de travail, il faut récupérer direction et catégorie depuis le tableau
+                for key, jours in self.budget_data.get(self.current_year, {}).items():
+                    row_index, mois = key
+                    # Récupère direction et catégorie depuis le tableau
+                    current_direction = None
+                    for r in range(row_index + 1):
+                        if r in self.direction_rows:
+                            current_direction = self.table_budget.item(r, 0).text()
+                    categorie = self.table_budget.item(row_index, 0).text()
+                    
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO temps_travail (projet_id, annee, direction, categorie, mois, jours)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (self.projet_id, int(self.current_year), current_direction, categorie, mois, jours))
+                conn.commit()
+                conn.close()
+                self.modified = False
+
+            if hasattr(self, 'current_recettes_year'):
+                self.save_recettes_table_to_memory(self.current_recettes_year)
+                conn = sqlite3.connect('gestion_budget.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_recettes_year)))
+                for key, (montant, detail) in self.recettes_data.get(self.current_recettes_year, {}).items():
+                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                        cursor.execute("INSERT INTO recettes (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_recettes_year), *key, montant or 0, detail or ""))
+                conn.commit()
+                conn.close()
+                self.recettes_modified = False
+
+            if hasattr(self, 'current_depenses_year'):
+                self.save_depenses_table_to_memory(self.current_depenses_year)
+                conn = sqlite3.connect('gestion_budget.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_depenses_year)))
+                for key, (montant, detail) in self.depenses_data.get(self.current_depenses_year, {}).items():
+                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                        cursor.execute("INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_depenses_year), *key, montant or 0, detail or ""))
+                conn.commit()
+                conn.close()
+                self.depenses_modified = False
+
+            if hasattr(self, 'current_autres_depenses_year'):
+                self.save_autres_depenses_table_to_memory(self.current_autres_depenses_year)
+                conn = sqlite3.connect('gestion_budget.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_autres_depenses_year)))
+                for key, (montant, detail) in self.autres_depenses_data.get(self.current_autres_depenses_year, {}).items():
+                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                        cursor.execute("INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_autres_depenses_year), *key, montant or 0, detail or ""))
+                conn.commit()
+                conn.close()
+                self.autres_depenses_modified = False
+
+            QMessageBox.information(self, "Enregistrement", "Toutes les données ont été enregistrées.")
+
+        btn_save_all.clicked.connect(save_all_to_db)
 
         # --- Gestion fermeture : avertir si non enregistré ---
         def closeEvent(event):
