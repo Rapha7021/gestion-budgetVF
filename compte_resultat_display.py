@@ -385,11 +385,6 @@ class CompteResultatDisplay(QDialog):
                 # Compter les catégories de coût disponibles
                 cursor.execute(f"SELECT COUNT(*) FROM categorie_cout WHERE annee = {year}")
                 cat_count = cursor.fetchone()[0]
-                
-                print(f"DEBUG: Coût direct = 0 pour année {year}")
-                print(f"  - Entrées temps_travail trouvées: {temps_count}")
-                print(f"  - Catégories de coût pour {year}: {cat_count}")
-                
                 if temps_count > 0:
                     # Vérifier les catégories qui ne matchent pas
                     cursor.execute(f"""
@@ -403,7 +398,6 @@ class CompteResultatDisplay(QDialog):
                         print(f"  - Catégories temps_travail sans correspondance: {missing_cats}")
                         
         except sqlite3.OperationalError as e:
-            print(f"Erreur SQL coût direct: {e}")
             data['cout_direct'] = 0
         
         # 6. DOTATION AUX AMORTISSEMENTS
@@ -570,7 +564,6 @@ class CompteResultatDisplay(QDialog):
                 return 0
                 
         except Exception as e:
-            print(f"Erreur dans calculate_distributed_cir: {e}")
             import traceback
             traceback.print_exc()
             return 0
@@ -1001,7 +994,6 @@ class CompteResultatDisplay(QDialog):
             return cout_total_temps
             
         except Exception as e:
-            print(f"Erreur dans calculate_temps_travail_total: {e}")
             return 0
     
     def calculate_amortissements_total_subvention_style(self, cursor, project_id, projet_info):
@@ -1065,7 +1057,6 @@ class CompteResultatDisplay(QDialog):
             return amortissements_total
             
         except Exception as e:
-            print(f"Erreur dans calculate_amortissements_total_subvention_style: {e}")
             return 0
     
     
@@ -1140,13 +1131,11 @@ class CompteResultatDisplay(QDialog):
                         amortissements_total += amortissement_mensuel * mois_amort_annee
                 
                 except (ValueError, TypeError) as e:
-                    print(f"Erreur lors du traitement de l'investissement {montant_inv}: {e}")
                     continue
             
             return amortissements_total
             
         except Exception as e:
-            print(f"Erreur dans calculate_amortissement_for_period: {e}")
             return 0
     
     def calculate_amortissement_for_year(self, cursor, project_id, year, month, projet_info):
@@ -1219,7 +1208,6 @@ class CompteResultatDisplay(QDialog):
             return amortissements_total
             
         except Exception as e:
-            print(f"Erreur dans calculate_amortissement_for_year: {e}")
             return 0
 
 def show_compte_resultat(parent, config_data):

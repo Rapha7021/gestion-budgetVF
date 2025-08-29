@@ -1,1645 +1,944 @@
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QTableWidget, QTableWidgetItem, QComboBox, QFileDialog,
-    QTabWidget, QWidget, QLineEdit, QSpinBox, QCheckBox,
-    QMessageBox, QTextEdit, QListWidget, QSplitter, QGroupBox,
-    QScrollArea, QProgressBar, QTreeWidget, QTreeWidgetItem, QInputDialog,
-    QFormLayout, QGridLayout
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
 import pandas as pd
 import json
-import os
 import sqlite3
-from datetime import datetime
-import re
+import os
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Tuple
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+                             QLabel, QComboBox, QTableWidget, QTableWidgetItem,
+                             QFileDialog, QMessageBox, QLineEdit, QSpinBox,
+                             QTextEdit, QTabWidget, QWidget, QFormLayout,
+                             QCheckBox, QGroupBox, QScrollArea, QFrame)
+from PyQt6.QtCore import Qt
+import traceback
+
+class ExcelImportConfigManager:
+    """Gestionnaire des configurations d'import Excel"""
+    
+    def __init__(self):
+        self.config_dir = "import_configs"
+        self.ensure_config_dir()
+    
+    def ensure_config_dir(self):
+        """Crée le répertoire de configuration s'il n'existe pas"""
+        if not os.path.exists(self.config_dir):
+            os.makedirs(self.config_dir)
+    
+    def save_config(self, name: str, config: Dict) -> bool:
+        """Sauvegarde une configuration"""
+        try:
+            filepath = os.path.join(self.config_dir, f"{name}.json")
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"Erreur sauvegarde config: {e}")
+            return False
+    
+    def load_config(self, name: str) -> Optional[Dict]:
+        """Charge une configuration"""
+        try:
+            filepath = os.path.join(self.config_dir, f"{name}.json")
+            if os.path.exists(filepath):
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Erreur chargement config: {e}")
+        return None
+    
+    def list_configs(self) -> List[str]:
+        """Liste toutes les configurations disponibles"""
+        configs = []
+        if os.path.exists(self.config_dir):
+            for file in os.listdir(self.config_dir):
+                if file.endswith('.json'):
+                    configs.append(file[:-5])  # Enlever .json
+        return configs
+    
+    def delete_config(self, name: str) -> bool:
+        """Supprime une configuration"""
+        try:
+            filepath = os.path.join(self.config_dir, f"{name}.json")
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                return True
+        except Exception as e:
+            print(f"Erreur suppression config: {e}")
+        return False
+
+class TempsTravailvailMapper:
+    """Classe pour mapper les données Excel vers la table temps_travail"""
+    
+    def __init__(self):
+        self.db_path = "gestion_budget.db"
+        
+    def get_available_projects(self) -> List[Tuple[int, str, str]]:
+        """Récupère la liste des projets disponibles"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, code, nom FROM projets ORDER BY code")
+        projects = cursor.fetchall()
+        conn.close()
+        return projects
+    
+    def get_project_team_data(self, projet_id: int) -> List[Tuple[str, str]]:
+        """Récupère les données d'équipe pour un projet (direction, catégorie)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT direction, type FROM equipe WHERE projet_id = ?", (projet_id,))
+        team_data = cursor.fetchall()
+        conn.close()
+        return team_data
+    
+    def get_project_dates(self, projet_id: int) -> Optional[Tuple[str, str]]:
+        """Récupère les dates de début et fin d'un projet"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (projet_id,))
+        dates = cursor.fetchone()
+        conn.close()
+        return dates
+    
+    def generate_months_list(self, date_debut: str, date_fin: str) -> List[str]:
+        """Génère la liste des mois entre deux dates au format MM/yyyy"""
+        try:
+            debut = datetime.strptime(date_debut, '%m/%Y')
+            fin = datetime.strptime(date_fin, '%m/%Y')
+            
+            months = []
+            current = debut
+            while current <= fin:
+                months.append(current.strftime('%m/%Y'))
+                # Passer au mois suivant
+                if current.month == 12:
+                    current = current.replace(year=current.year + 1, month=1)
+                else:
+                    current = current.replace(month=current.month + 1)
+            
+            return months
+        except Exception as e:
+            print(f"Erreur génération mois: {e}")
+            return []
+    
+    def process_excel_data(self, df: pd.DataFrame, config: Dict, projet_id: int) -> List[Dict]:
+        """Traite les données Excel selon la configuration"""
+        results = []
+        
+        try:
+            # Récupérer les données du projet
+            project_dates = self.get_project_dates(projet_id)
+            if not project_dates or not project_dates[0] or not project_dates[1]:
+                raise ValueError("Dates du projet non définies")
+            
+            # Générer la liste des mois du projet
+            months_list = self.generate_months_list(project_dates[0], project_dates[1])
+            if not months_list:
+                raise ValueError("Impossible de générer la liste des mois")
+            
+            # Récupérer les données d'équipe
+            team_data = self.get_project_team_data(projet_id)
+            
+            # Configuration des colonnes
+            column_mapping = config.get('column_mapping', {})
+            data_structure = config.get('data_structure', 'rows')  # 'rows' ou 'columns'
+            
+            if data_structure == 'rows':
+                # Chaque ligne = une entrée temps_travail
+                results = self._process_row_based_data(df, config, projet_id, months_list, team_data)
+            else:
+                # Structure en colonnes (mois en colonnes par exemple)
+                results = self._process_column_based_data(df, config, projet_id, months_list, team_data)
+                
+        except Exception as e:
+            print(f"Erreur traitement données: {e}")
+            traceback.print_exc()
+        
+        return results
+    
+    def _process_row_based_data(self, df: pd.DataFrame, config: Dict, projet_id: int, 
+                               months_list: List[str], team_data: List[Tuple[str, str]]) -> List[Dict]:
+        """Traite les données organisées en lignes"""
+        results = []
+        column_mapping = config.get('column_mapping', {})
+        
+        for index, row in df.iterrows():
+            try:
+                # Extraction des valeurs selon le mapping
+                direction = self._extract_value(row, column_mapping.get('direction'))
+                categorie = self._extract_value(row, column_mapping.get('categorie'))
+                annee = self._extract_value(row, column_mapping.get('annee'))
+                mois = self._extract_value(row, column_mapping.get('mois'))
+                jours = self._extract_value(row, column_mapping.get('jours'))
+                
+                # Validation et nettoyage
+                if not all([direction, categorie, annee, mois]) or jours is None:
+                    continue
+                
+                # Normalisation du mois
+                mois_normalise = self._normalize_month(mois, annee)
+                if mois_normalise not in months_list:
+                    continue  # Mois hors période du projet
+                
+                results.append({
+                    'projet_id': projet_id,
+                    'annee': int(annee),
+                    'direction': str(direction),
+                    'categorie': str(categorie),
+                    'mois': mois_normalise,
+                    'jours': float(jours)
+                })
+                
+            except Exception as e:
+                print(f"Erreur ligne {index}: {e}")
+                continue
+        
+        return results
+    
+    def _process_column_based_data(self, df: pd.DataFrame, config: Dict, projet_id: int,
+                                  months_list: List[str], team_data: List[Tuple[str, str]]) -> List[Dict]:
+        """Traite les données organisées en colonnes (ex: mois en colonnes)"""
+        results = []
+        column_mapping = config.get('column_mapping', {})
+        month_columns = config.get('month_columns', [])
+        
+        for index, row in df.iterrows():
+            try:
+                # Extraction des données fixes
+                direction = self._extract_value(row, column_mapping.get('direction'))
+                categorie = self._extract_value(row, column_mapping.get('categorie'))
+                annee = self._extract_value(row, column_mapping.get('annee'))
+                
+                if not all([direction, categorie, annee]):
+                    continue
+                
+                # Traitement des colonnes de mois
+                for month_col_config in month_columns:
+                    col_name = month_col_config.get('column')
+                    mois_value = month_col_config.get('month')
+                    
+                    if col_name in df.columns:
+                        jours = self._extract_value(row, {'column': col_name})
+                        if jours is not None and jours > 0:
+                            mois_normalise = self._normalize_month(mois_value, annee)
+                            if mois_normalise in months_list:
+                                results.append({
+                                    'projet_id': projet_id,
+                                    'annee': int(annee),
+                                    'direction': str(direction),
+                                    'categorie': str(categorie),
+                                    'mois': mois_normalise,
+                                    'jours': float(jours)
+                                })
+                
+            except Exception as e:
+                print(f"Erreur ligne {index}: {e}")
+                continue
+        
+        return results
+    
+    def _extract_value(self, row, column_config):
+        """Extrait une valeur selon la configuration de colonne"""
+        if not column_config:
+            return None
+        
+        col_name = column_config.get('column')
+        default_value = column_config.get('default')
+        transform = column_config.get('transform')
+        
+        if col_name and col_name in row.index:
+            value = row[col_name]
+            
+            # Gestion des valeurs vides
+            if pd.isna(value) or value == '':
+                return default_value
+            
+            # Transformations
+            if transform == 'upper':
+                value = str(value).upper()
+            elif transform == 'lower':
+                value = str(value).lower()
+            elif transform == 'strip':
+                value = str(value).strip()
+            
+            return value
+        
+        return default_value
+    
+    def _normalize_month(self, mois, annee):
+        """Normalise le format du mois vers MM/yyyy"""
+        try:
+            if isinstance(mois, str) and '/' in mois:
+                return mois  # Déjà au bon format
+            
+            # Si c'est un numéro de mois
+            if isinstance(mois, (int, float)):
+                return f"{int(mois):02d}/{int(annee)}"
+            
+            # Si c'est un nom de mois
+            month_names = {
+                'janvier': 1, 'février': 2, 'mars': 3, 'avril': 4,
+                'mai': 5, 'juin': 6, 'juillet': 7, 'août': 8,
+                'septembre': 9, 'octobre': 10, 'novembre': 11, 'décembre': 12
+            }
+            
+            mois_lower = str(mois).lower()
+            if mois_lower in month_names:
+                return f"{month_names[mois_lower]:02d}/{int(annee)}"
+            
+        except Exception as e:
+            print(f"Erreur normalisation mois: {e}")
+        
+        return None
+    
+    def save_to_database(self, data: List[Dict]) -> Tuple[bool, str]:
+        """Sauvegarde les données dans la base"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Vérifier que la table existe
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS temps_travail (
+                    projet_id INTEGER,
+                    annee INTEGER,
+                    direction TEXT,
+                    categorie TEXT,
+                    mois TEXT,
+                    jours REAL,
+                    PRIMARY KEY (projet_id, annee, direction, categorie, mois)
+                )
+            """)
+            
+            # Insertion des données
+            inserted_count = 0
+            for entry in data:
+                try:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO temps_travail 
+                        (projet_id, annee, direction, categorie, mois, jours)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        entry['projet_id'],
+                        entry['annee'],
+                        entry['direction'],
+                        entry['categorie'],
+                        entry['mois'],
+                        entry['jours']
+                    ))
+                    inserted_count += 1
+                except Exception as e:
+                    print(f"Erreur insertion: {e}")
+                    continue
+            
+            conn.commit()
+            conn.close()
+            
+            return True, f"Import réussi: {inserted_count} entrées sauvegardées"
+            
+        except Exception as e:
+            return False, f"Erreur sauvegarde: {str(e)}"
 
 class ExcelImportDialog(QDialog):
-    def __init__(self, projet_id, parent=None):
+    """Interface graphique pour l'import Excel configurable"""
+    
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.projet_id = projet_id
-        self.setWindowTitle("Import Excel - Configuration universelle")
-        self.setMinimumSize(1400, 900)
+        self.setWindowTitle("Import Excel - Temps de Travail")
+        self.setMinimumSize(1200, 800)
         
-        # Données actuelles
-        self.excel_file = None
-        self.excel_sheets = {}
-        self.current_config = {}
-        self.configs_dir = "import_configs"
+        self.config_manager = ExcelImportConfigManager()
+        self.mapper = TempsTravailvailMapper()
+        self.current_df = None
+        self.current_config = None
         
-        # Créer le dossier de configs s'il n'existe pas
-        if not os.path.exists(self.configs_dir):
-            os.makedirs(self.configs_dir)
-        
+        self.setup_ui()
+        self.load_projects()
+        self.load_configs()
+    
+    def setup_ui(self):
+        """Configure l'interface utilisateur"""
         layout = QVBoxLayout()
         
-        # === TITRE ===
-        title = QLabel("Configuration d'import Excel")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
+        # Onglets
+        self.tab_widget = QTabWidget()
         
-        # === ÉTAPE 1: Gestion des profils ===
-        profile_group = QGroupBox("1. Profils de configuration")
-        profile_layout = QHBoxLayout()
+        # Onglet 1: Configuration
+        self.setup_config_tab()
         
-        profile_layout.addWidget(QLabel("Profil actuel:"))
-        self.profile_combo = QComboBox()
-        self.load_available_profiles()
-        profile_layout.addWidget(self.profile_combo)
+        # Onglet 2: Import
+        self.setup_import_tab()
         
-        btn_new_profile = QPushButton("Nouveau")
-        btn_load_profile = QPushButton("Charger")
-        btn_save_profile = QPushButton("Sauvegarder")
-        btn_delete_profile = QPushButton("Supprimer")
+        # Onglet 3: Preview
+        self.setup_preview_tab()
         
-        profile_layout.addWidget(btn_new_profile)
-        profile_layout.addWidget(btn_load_profile)
-        profile_layout.addWidget(btn_save_profile)
-        profile_layout.addWidget(btn_delete_profile)
+        layout.addWidget(self.tab_widget)
         
-        profile_group.setLayout(profile_layout)
-        layout.addWidget(profile_group)
+        # Boutons
+        button_layout = QHBoxLayout()
         
-        # === ÉTAPE 2: Sélection fichier ===
-        file_group = QGroupBox("2. Sélection du fichier Excel")
-        file_layout = QVBoxLayout()
+        self.test_btn = QPushButton("Test Configuration")
+        self.test_btn.clicked.connect(self.test_configuration)
+        button_layout.addWidget(self.test_btn)
         
-        file_select_layout = QHBoxLayout()
-        self.file_label = QLabel("Aucun fichier sélectionné")
-        btn_select = QPushButton("Parcourir...")
-        btn_select.clicked.connect(self.select_excel_file)
-        file_select_layout.addWidget(self.file_label)
-        file_select_layout.addWidget(btn_select)
-        file_layout.addLayout(file_select_layout)
+        self.import_btn = QPushButton("Importer")
+        self.import_btn.clicked.connect(self.perform_import)
+        self.import_btn.setEnabled(False)
+        button_layout.addWidget(self.import_btn)
         
-        file_group.setLayout(file_layout)
-        layout.addWidget(file_group)
+        button_layout.addStretch()
         
-        # === ÉTAPE 3: Configuration par type de données ===
-        config_group = QGroupBox("3. Configuration du mapping")
-        config_layout = QVBoxLayout()
+        close_btn = QPushButton("Fermer")
+        close_btn.clicked.connect(self.close)
+        button_layout.addWidget(close_btn)
         
-        # Onglets pour chaque type
-        self.tabs = QTabWidget()
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+    
+    def setup_config_tab(self):
+        """Configure l'onglet de configuration"""
+        config_tab = QWidget()
+        layout = QVBoxLayout()
         
-        # Chaque onglet = un type de données à importer
-        self.mapping_widgets = {
-            'temps_travail': MatrixMappingWidget('temps_travail', self, self.projet_id),
-            'recettes': UniversalMappingWidget('recettes', self),
-            'depenses': UniversalMappingWidget('depenses', self),
-            'autres_depenses': UniversalMappingWidget('autres_depenses', self)
-        }
+        # Gestion des configurations
+        config_group = QGroupBox("Gestion des Configurations")
+        config_layout = QHBoxLayout()
         
-        self.tabs.addTab(self.mapping_widgets['temps_travail'], "Temps de travail (Matrice)")
-        self.tabs.addTab(self.mapping_widgets['recettes'], "Recettes")
-        self.tabs.addTab(self.mapping_widgets['depenses'], "Dépenses")
-        self.tabs.addTab(self.mapping_widgets['autres_depenses'], "Autres dépenses")
+        config_layout.addWidget(QLabel("Configuration:"))
+        self.config_combo = QComboBox()
+        self.config_combo.currentTextChanged.connect(self.load_selected_config)
+        config_layout.addWidget(self.config_combo)
         
-        config_layout.addWidget(self.tabs)
+        new_btn = QPushButton("Nouvelle")
+        new_btn.clicked.connect(self.new_config)
+        config_layout.addWidget(new_btn)
+        
+        save_btn = QPushButton("Sauvegarder")
+        save_btn.clicked.connect(self.save_config)
+        config_layout.addWidget(save_btn)
+        
+        delete_btn = QPushButton("Supprimer")
+        delete_btn.clicked.connect(self.delete_config)
+        config_layout.addWidget(delete_btn)
+        
         config_group.setLayout(config_layout)
         layout.addWidget(config_group)
         
-        # === BOUTONS ===
-        btn_layout = QHBoxLayout()
+        # Configuration détaillée
+        detail_group = QGroupBox("Configuration Détaillée")
+        detail_layout = QFormLayout()
         
-        btn_preview = QPushButton("Aperçu données")
-        btn_import = QPushButton("IMPORTER")
-        btn_close = QPushButton("Fermer")
+        self.config_name_edit = QLineEdit()
+        detail_layout.addRow("Nom:", self.config_name_edit)
         
-        btn_preview.clicked.connect(self.preview_data)
-        btn_import.clicked.connect(self.import_data)
-        btn_close.clicked.connect(self.close)
+        self.description_edit = QTextEdit()
+        self.description_edit.setMaximumHeight(60)
+        detail_layout.addRow("Description:", self.description_edit)
         
-        # Style pour le bouton d'import
-        btn_import.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }")
-        btn_preview.setStyleSheet("QPushButton { background-color: #2196F3; color: white; padding: 8px; }")
+        self.structure_combo = QComboBox()
+        self.structure_combo.addItems(["rows", "columns"])
+        self.structure_combo.currentTextChanged.connect(self.on_structure_changed)
+        detail_layout.addRow("Structure données:", self.structure_combo)
         
-        btn_layout.addWidget(btn_preview)
-        btn_layout.addWidget(btn_import)
-        btn_layout.addWidget(btn_close)
+        # Mapping des colonnes
+        self.setup_column_mapping_ui(detail_layout)
         
-        layout.addLayout(btn_layout)
+        detail_group.setLayout(detail_layout)
+        layout.addWidget(detail_group)
         
-        # === Barre de progression ===
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
-        
-        self.setLayout(layout)
-        
-        # Connexions
-        btn_new_profile.clicked.connect(self.new_profile)
-        btn_load_profile.clicked.connect(self.load_profile)
-        btn_save_profile.clicked.connect(self.save_profile)
-        btn_delete_profile.clicked.connect(self.delete_profile)
+        config_tab.setLayout(layout)
+        self.tab_widget.addTab(config_tab, "Configuration")
     
-    def load_available_profiles(self):
-        """Charge la liste des profils disponibles"""
-        self.profile_combo.clear()
-        self.profile_combo.addItem("-- Nouveau profil --")
-        
-        if os.path.exists(self.configs_dir):
-            for file in os.listdir(self.configs_dir):
-                if file.endswith('.json'):
-                    profile_name = file[:-5]  # Enlève .json
-                    self.profile_combo.addItem(profile_name)
-    
-    def new_profile(self):
-        """Crée un nouveau profil"""
-        self.profile_combo.setCurrentText("-- Nouveau profil --")
-        self.current_config = {}
-        
-        # Reset tous les widgets de mapping
-        for widget in self.mapping_widgets.values():
-            widget.reset_configuration()
-    
-    def load_profile(self):
-        """Charge un profil existant"""
-        profile_name = self.profile_combo.currentText()
-        if profile_name == "-- Nouveau profil --":
-            return
-        
-        config_file = os.path.join(self.configs_dir, f"{profile_name}.json")
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    self.current_config = json.load(f)
-                
-                # Applique la config aux widgets
-                for data_type, widget in self.mapping_widgets.items():
-                    if data_type in self.current_config:
-                        widget.load_configuration(self.current_config[data_type])
-                
-                QMessageBox.information(self, "Succès", f"Profil '{profile_name}' chargé avec succès !")
-                
-            except Exception as e:
-                QMessageBox.warning(self, "Erreur", f"Impossible de charger le profil: {e}")
-    
-    def save_profile(self):
-        """Sauvegarde le profil actuel"""
-        profile_name = self.profile_combo.currentText()
-        if profile_name == "-- Nouveau profil --":
-            profile_name, ok = QInputDialog.getText(self, "Nouveau profil", "Nom du profil:")
-            if not ok or not profile_name.strip():
-                return
-            profile_name = profile_name.strip()
-        
-        # Collecte la config de tous les widgets
-        config = {}
-        for data_type, widget in self.mapping_widgets.items():
-            config[data_type] = widget.get_configuration()
-        
-        config_file = os.path.join(self.configs_dir, f"{profile_name}.json")
-        try:
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
-            
-            self.load_available_profiles()
-            self.profile_combo.setCurrentText(profile_name)
-            QMessageBox.information(self, "Succès", f"Profil '{profile_name}' sauvegardé !")
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Impossible de sauvegarder: {e}")
-    
-    def delete_profile(self):
-        """Supprime un profil"""
-        profile_name = self.profile_combo.currentText()
-        if profile_name == "-- Nouveau profil --":
-            QMessageBox.warning(self, "Erreur", "Sélectionnez un profil à supprimer")
-            return
-        
-        reply = QMessageBox.question(self, "Confirmation", 
-                                   f"Supprimer le profil '{profile_name}' ?",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            config_file = os.path.join(self.configs_dir, f"{profile_name}.json")
-            try:
-                os.remove(config_file)
-                self.load_available_profiles()
-                QMessageBox.information(self, "Succès", "Profil supprimé !")
-            except Exception as e:
-                QMessageBox.warning(self, "Erreur", f"Impossible de supprimer: {e}")
-    
-    def select_excel_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Sélectionner fichier Excel", "", "Fichiers Excel (*.xlsx *.xls)"
-        )
-        if file_path:
-            self.excel_file = file_path
-            self.file_label.setText(os.path.basename(file_path))
-            self.load_excel_sheets()
-    
-    def load_excel_sheets(self):
-        """Charge toutes les feuilles du fichier Excel"""
-        try:
-            # Lit toutes les feuilles (juste les 10 premières lignes pour l'aperçu)
-            self.excel_sheets = pd.read_excel(self.excel_file, sheet_name=None, nrows=10)
-            
-            # Met à jour les widgets de mapping
-            for widget in self.mapping_widgets.values():
-                widget.update_excel_data(self.excel_sheets)
-                
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Impossible de lire le fichier Excel: {e}")
-    
-    def preview_data(self):
-        """Affiche un aperçu des données qui seront importées"""
-        if not self.excel_file:
-            QMessageBox.warning(self, "Erreur", "Sélectionnez d'abord un fichier Excel")
-            return
-        
-        # Ouvre la dialog d'aperçu
-        preview_dialog = PreviewDialog(self, self.excel_file, self.mapping_widgets, self.projet_id)
-        preview_dialog.exec()
-    
-    def import_data(self):
-        """Lance l'import des données"""
-        if not self.excel_file:
-            QMessageBox.warning(self, "Erreur", "Sélectionnez d'abord un fichier Excel")
-            return
-        
-        # Vérifie qu'au moins un mapping est configuré
-        has_mapping = False
-        for widget in self.mapping_widgets.values():
-            if widget.has_valid_mapping():
-                has_mapping = True
-                break
-        
-        if not has_mapping:
-            QMessageBox.warning(self, "Erreur", "Configurez au moins un mapping valide")
-            return
-        
-        reply = QMessageBox.question(self, "Confirmation", 
-                                   "Lancer l'import des données ?\n\nAttention: cela peut écraser des données existantes.",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            self.run_import()
-    
-    def run_import(self):
-        """Exécute l'import des données"""
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
-        
-        try:
-            total_imports = 0
-            successful_imports = 0
-            
-            for data_type, widget in self.mapping_widgets.items():
-                if widget.has_valid_mapping():
-                    self.progress_bar.setLabelText(f"Import {data_type}...")
-                    
-                    success = widget.import_data_to_database(self.excel_file, self.projet_id)
-                    total_imports += 1
-                    if success:
-                        successful_imports += 1
-                    
-                    self.progress_bar.setValue(int((total_imports / len(self.mapping_widgets)) * 100))
-            
-            self.progress_bar.setValue(100)
-            QMessageBox.information(self, "Import terminé", 
-                                  f"Import terminé !\n{successful_imports}/{total_imports} types importés avec succès.")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Erreur d'import", f"Erreur lors de l'import: {e}")
-        
-        finally:
-            self.progress_bar.setVisible(False)
-
-
-class UniversalMappingWidget(QWidget):
-    def __init__(self, data_type, parent_dialog):
-        super().__init__()
-        self.data_type = data_type
-        self.parent_dialog = parent_dialog
-        self.excel_sheets = {}
-        
-        layout = QVBoxLayout()
-        
-        # === Configuration de base ===
-        basic_config = QGroupBox("Configuration de base")
-        basic_layout = QVBoxLayout()
-        
-        # Sélection feuille
-        sheet_layout = QHBoxLayout()
-        sheet_layout.addWidget(QLabel("Feuille Excel:"))
-        self.sheet_combo = QComboBox()
-        self.sheet_combo.currentTextChanged.connect(self.on_sheet_changed)
-        sheet_layout.addWidget(self.sheet_combo)
-        basic_layout.addLayout(sheet_layout)
-        
-        # Ligne d'en-tête
-        header_layout = QHBoxLayout()
-        header_layout.addWidget(QLabel("Ligne d'en-têtes:"))
-        self.header_row = QSpinBox()
-        self.header_row.setMinimum(0)
-        self.header_row.setValue(0)
-        self.header_row.valueChanged.connect(self.update_columns_preview)
-        header_layout.addWidget(self.header_row)
-        
-        # Première ligne de données
-        data_start_layout = QHBoxLayout()
-        data_start_layout.addWidget(QLabel("Première ligne de données:"))
-        self.data_start_row = QSpinBox()
-        self.data_start_row.setMinimum(1)
-        self.data_start_row.setValue(1)
-        self.data_start_row.valueChanged.connect(self.update_columns_preview)  # Connexion ajoutée
-        data_start_layout.addWidget(self.data_start_row)
-        header_layout.addLayout(data_start_layout)
-        
-        basic_layout.addLayout(header_layout)
-        basic_config.setLayout(basic_layout)
-        layout.addWidget(basic_config)
-        
-        # === Mapping des colonnes ===
-        mapping_config = QGroupBox("Mapping des colonnes")
-        mapping_layout = QHBoxLayout()
-        
-        # Colonne gauche: Colonnes Excel disponibles
-        left_panel = QVBoxLayout()
-        left_panel.addWidget(QLabel("Colonnes Excel disponibles:"))
-        self.excel_columns_list = QListWidget()
-        left_panel.addWidget(self.excel_columns_list)
-        
-        # Preview des données
-        left_panel.addWidget(QLabel("Aperçu des données:"))
-        self.data_preview = QTableWidget()
-        self.data_preview.setMaximumHeight(150)
-        left_panel.addWidget(self.data_preview)
-        
-        # Colonne droite: Champs requis + mapping
-        right_panel = QVBoxLayout()
-        right_panel.addWidget(QLabel("Mapping vers vos champs:"))
-        
-        self.mapping_table = QTableWidget()
-        self.setup_mapping_table()
-        right_panel.addWidget(self.mapping_table)
-        
-        # Ajout du splitter
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        left_widget = QWidget()
-        left_widget.setLayout(left_panel)
-        right_widget = QWidget()
-        right_widget.setLayout(right_panel)
-        
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setSizes([400, 600])
-        
-        mapping_layout.addWidget(splitter)
-        mapping_config.setLayout(mapping_layout)
-        layout.addWidget(mapping_config)
-        
-        # === Options avancées ===
-        advanced_config = QGroupBox("Options avancées")
-        advanced_layout = QVBoxLayout()
-        
-        # Filtres
-        filter_layout = QVBoxLayout()
-        filter_layout.addWidget(QLabel("Filtre des données (optionnel):"))
-        self.filter_text = QTextEdit()
-        self.filter_text.setMaximumHeight(60)
-        self.filter_text.setPlaceholderText("Ex: Colonne_A == 'MonProjet' and Colonne_B >= 2024")
-        filter_layout.addWidget(self.filter_text)
-        advanced_layout.addLayout(filter_layout)
-        
-        advanced_config.setLayout(advanced_layout)
-        layout.addWidget(advanced_config)
-        
-        self.setLayout(layout)
-    
-    def setup_mapping_table(self):
-        """Configure le tableau de mapping selon le type de données"""
-        # Définit les champs requis selon le type
-        field_definitions = {
-            'temps_travail': [
-                ('Projet', True, 'Nom ou ID du projet'),
-                ('Année', True, 'Année (format YYYY)'),
-                ('Direction', False, 'Direction/Service'),
-                ('Catégorie', False, 'Catégorie de personnel'),
-                ('Mois', True, 'Mois (texte ou numéro)'),
-                ('Jours', True, 'Nombre de jours travaillés')
-            ],
-            'recettes': [
-                ('Projet', True, 'Nom ou ID du projet'),
-                ('Année', True, 'Année (format YYYY)'),
-                ('Catégorie', False, 'Type de recette'),
-                ('Mois', True, 'Mois (texte ou numéro)'),
-                ('Montant', True, 'Montant en euros'),
-                ('Détail', False, 'Description/commentaire')
-            ],
-            'depenses': [
-                ('Projet', True, 'Nom ou ID du projet'),
-                ('Année', True, 'Année (format YYYY)'),
-                ('Catégorie', False, 'Type de dépense'),
-                ('Mois', True, 'Mois (texte ou numéro)'),
-                ('Montant', True, 'Montant en euros'),
-                ('Détail', False, 'Description/commentaire')
-            ],
-            'autres_depenses': [
-                ('Projet', True, 'Nom ou ID du projet'),
-                ('Année', True, 'Année (format YYYY)'),
-                ('Ligne', False, 'Numéro de ligne'),
-                ('Mois', True, 'Mois (texte ou numéro)'),
-                ('Montant', True, 'Montant en euros'),
-                ('Détail', False, 'Description/commentaire')
-            ]
-        }
-        
-        fields = field_definitions.get(self.data_type, [])
-        
-        self.mapping_table.setRowCount(len(fields))
-        self.mapping_table.setColumnCount(4)
-        self.mapping_table.setHorizontalHeaderLabels([
-            "Champ requis", "Colonne Excel", "Obligatoire", "Description"
-        ])
-        
-        for i, (field_name, required, description) in enumerate(fields):
-            # Nom du champ (non éditable)
-            field_item = QTableWidgetItem(field_name)
-            field_item.setFlags(field_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.mapping_table.setItem(i, 0, field_item)
-            
-            # Combobox pour la colonne Excel
-            combo = QComboBox()
-            combo.addItem("-- Non mappé --")
-            self.mapping_table.setCellWidget(i, 1, combo)
-            
-            # Checkbox obligatoire (non éditable pour les champs requis)
-            checkbox = QCheckBox()
-            checkbox.setChecked(required)
-            if required:
-                checkbox.setEnabled(False)
-            self.mapping_table.setCellWidget(i, 2, checkbox)
-            
-            # Description
-            desc_item = QTableWidgetItem(description)
-            desc_item.setFlags(desc_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.mapping_table.setItem(i, 3, desc_item)
-        
-        # Redimensionne les colonnes
-        self.mapping_table.setColumnWidth(0, 120)
-        self.mapping_table.setColumnWidth(1, 150)
-        self.mapping_table.setColumnWidth(2, 80)
-        self.mapping_table.setColumnWidth(3, 200)
-    
-    def update_excel_data(self, excel_sheets):
-        """Met à jour les données Excel disponibles"""
-        self.excel_sheets = excel_sheets
-        
-        # Met à jour la liste des feuilles
-        self.sheet_combo.clear()
-        self.sheet_combo.addItems(list(excel_sheets.keys()))
-        
-        if excel_sheets:
-            self.on_sheet_changed()
-    
-    def on_sheet_changed(self):
-        """Appelé quand la feuille Excel change"""
-        self.update_columns_preview()
-    
-    def update_columns_preview(self):
-        """Met à jour l'aperçu des colonnes et données"""
-        sheet_name = self.sheet_combo.currentText()
-        if not sheet_name or sheet_name not in self.excel_sheets:
-            return
-        
-        try:
-            # Calcule les lignes à ignorer entre l'en-tête et le début des données
-            header_row = self.header_row.value()
-            data_start_row = self.data_start_row.value()
-            
-            # Si la ligne de données commence après l'en-tête, on ignore les lignes intermédiaires
-            if data_start_row > header_row + 1:
-                skip_rows = list(range(header_row + 1, data_start_row))
-            else:
-                skip_rows = None
-            
-            # Relit avec la bonne ligne d'en-tête et en ignorant les bonnes lignes
-            df = pd.read_excel(
-                self.parent_dialog.excel_file,
-                sheet_name=sheet_name,
-                header=header_row,
-                skiprows=skip_rows,
-                nrows=10  # Limite pour l'aperçu
-            )            # Met à jour la liste des colonnes
-            self.excel_columns_list.clear()
-            columns = list(df.columns)
-            self.excel_columns_list.addItems([str(col) for col in columns])
-            
-            # Met à jour les combobox de mapping
-            for row in range(self.mapping_table.rowCount()):
-                combo = self.mapping_table.cellWidget(row, 1)
-                if combo:
-                    current_value = combo.currentText()
-                    combo.clear()
-                    combo.addItem("-- Non mappé --")
-                    combo.addItems([str(col) for col in columns])
-                    
-                    # Restaure la sélection si possible
-                    if current_value in [str(col) for col in columns]:
-                        combo.setCurrentText(current_value)
-            
-            # Met à jour l'aperçu des données
-            self.update_data_preview(df)
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Erreur lors de la lecture: {e}")
-    
-    def update_data_preview(self, df):
-        """Met à jour le tableau d'aperçu des données"""
-        self.data_preview.setRowCount(min(5, len(df)))
-        self.data_preview.setColumnCount(len(df.columns))
-        self.data_preview.setHorizontalHeaderLabels([str(col) for col in df.columns])
-        
-        for row in range(min(5, len(df))):
-            for col, column_name in enumerate(df.columns):
-                value = str(df.iloc[row, col])
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.data_preview.setItem(row, col, item)
-    
-    def reset_configuration(self):
-        """Remet à zéro la configuration"""
-        self.sheet_combo.clear()
-        self.header_row.setValue(0)
-        self.data_start_row.setValue(1)
-        self.filter_text.clear()
-        
-        # Reset mapping table
-        for row in range(self.mapping_table.rowCount()):
-            combo = self.mapping_table.cellWidget(row, 1)
-            if combo:
-                combo.setCurrentText("-- Non mappé --")
-    
-    def get_configuration(self):
-        """Retourne la configuration actuelle"""
-        config = {
-            'sheet': self.sheet_combo.currentText(),
-            'header_row': self.header_row.value(),
-            'data_start_row': self.data_start_row.value(),
-            'filter': self.filter_text.toPlainText(),
-            'mappings': {}
-        }
-        
-        for row in range(self.mapping_table.rowCount()):
-            field_name = self.mapping_table.item(row, 0).text()
-            combo = self.mapping_table.cellWidget(row, 1)
-            checkbox = self.mapping_table.cellWidget(row, 2)
-            
-            if combo and checkbox:
-                config['mappings'][field_name] = {
-                    'excel_column': combo.currentText(),
-                    'required': checkbox.isChecked()
-                }
-        
-        return config
-    
-    def load_configuration(self, config):
-        """Charge une configuration"""
-        if 'sheet' in config:
-            self.sheet_combo.setCurrentText(config['sheet'])
-        if 'header_row' in config:
-            self.header_row.setValue(config['header_row'])
-        if 'data_start_row' in config:
-            self.data_start_row.setValue(config['data_start_row'])
-        if 'filter' in config:
-            self.filter_text.setPlainText(config['filter'])
-        
-        if 'mappings' in config:
-            for row in range(self.mapping_table.rowCount()):
-                field_name = self.mapping_table.item(row, 0).text()
-                if field_name in config['mappings']:
-                    mapping = config['mappings'][field_name]
-                    
-                    combo = self.mapping_table.cellWidget(row, 1)
-                    checkbox = self.mapping_table.cellWidget(row, 2)
-                    
-                    if combo and 'excel_column' in mapping:
-                        combo.setCurrentText(mapping['excel_column'])
-                    if checkbox and 'required' in mapping:
-                        checkbox.setChecked(mapping['required'])
-    
-    def has_valid_mapping(self):
-        """Vérifie si le mapping est valide"""
-        if not self.sheet_combo.currentText():
-            return False
-        
-        # Vérifie qu'au moins un champ obligatoire est mappé
-        for row in range(self.mapping_table.rowCount()):
-            checkbox = self.mapping_table.cellWidget(row, 2)
-            combo = self.mapping_table.cellWidget(row, 1)
-            
-            if checkbox and checkbox.isChecked():
-                if not combo or combo.currentText() == "-- Non mappé --":
-                    return False
-        
-        return True
-    
-    def import_data_to_database(self, excel_file, projet_id):
-        """Importe les données dans la base de données"""
-        try:
-            config = self.get_configuration()
-            
-            # Calcule les lignes à ignorer entre l'en-tête et le début des données
-            header_row = config['header_row']
-            data_start_row = config['data_start_row']
-            
-            if data_start_row > header_row + 1:
-                skip_rows = list(range(header_row + 1, data_start_row))
-            else:
-                skip_rows = None
-            
-            # Lit toutes les données de la feuille
-            df = pd.read_excel(
-                excel_file,
-                sheet_name=config['sheet'],
-                header=header_row,
-                skiprows=skip_rows
-            )
-            
-            # Applique le filtre si spécifié
-            if config['filter'].strip():
-                try:
-                    df = df.query(config['filter'])
-                except Exception as e:
-                    QMessageBox.warning(self, "Erreur de filtre", f"Filtre invalide: {e}")
-                    return False
-            
-            # Prépare le mapping des colonnes
-            column_mapping = {}
-            for field, mapping in config['mappings'].items():
-                if mapping['excel_column'] != "-- Non mappé --":
-                    column_mapping[field] = mapping['excel_column']
-            
-            # Import selon le type de données
-            return self._import_specific_data(df, column_mapping, projet_id)
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Erreur d'import", f"Erreur lors de l'import {self.data_type}: {e}")
-            return False
-    
-    def _import_specific_data(self, df, column_mapping, projet_id):
-        """Importe les données spécifiques selon le type"""
-        conn = sqlite3.connect('gestion_budget.db')
-        cursor = conn.cursor()
-        
-        try:
-            imported_count = 0
-            
-            for _, row in df.iterrows():
-                try:
-                    if self.data_type == 'temps_travail':
-                        self._import_temps_travail_row(cursor, row, column_mapping, projet_id)
-                    elif self.data_type == 'recettes':
-                        self._import_recettes_row(cursor, row, column_mapping, projet_id)
-                    elif self.data_type == 'depenses':
-                        self._import_depenses_row(cursor, row, column_mapping, projet_id)
-                    elif self.data_type == 'autres_depenses':
-                        self._import_autres_depenses_row(cursor, row, column_mapping, projet_id)
-                    
-                    imported_count += 1
-                    
-                except Exception as e:
-                    print(f"Erreur ligne {_}: {e}")  # Log mais continue
-            
-            conn.commit()
-            QMessageBox.information(self, "Succès", f"{imported_count} lignes importées pour {self.data_type}")
-            return True
-            
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            conn.close()
-    
-    def _import_temps_travail_row(self, cursor, row, mapping, projet_id):
-        """Importe une ligne de temps de travail"""
-        # Extrait les valeurs selon le mapping
-        annee = int(row[mapping['Année']]) if 'Année' in mapping else None
-        direction = str(row[mapping['Direction']]) if 'Direction' in mapping else ""
-        categorie = str(row[mapping['Catégorie']]) if 'Catégorie' in mapping else ""
-        mois = str(row[mapping['Mois']]) if 'Mois' in mapping else ""
-        jours = float(row[mapping['Jours']]) if 'Jours' in mapping else 0.0
-        
-        # Insert ou update
-        cursor.execute("""
-            INSERT OR REPLACE INTO temps_travail 
-            (projet_id, annee, direction, categorie, mois, jours)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (projet_id, annee, direction, categorie, mois, jours))
-    
-    def _import_recettes_row(self, cursor, row, mapping, projet_id):
-        """Importe une ligne de recettes"""
-        annee = int(row[mapping['Année']]) if 'Année' in mapping else None
-        mois = str(row[mapping['Mois']]) if 'Mois' in mapping else ""
-        montant = float(row[mapping['Montant']]) if 'Montant' in mapping else 0.0
-        detail = str(row[mapping['Détail']]) if 'Détail' in mapping else ""
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO recettes 
-            (projet_id, annee, mois, montant, detail)
-            VALUES (?, ?, ?, ?, ?)
-        """, (projet_id, annee, mois, montant, detail))
-    
-    def _import_depenses_row(self, cursor, row, mapping, projet_id):
-        """Importe une ligne de dépenses"""
-        annee = int(row[mapping['Année']]) if 'Année' in mapping else None
-        mois = str(row[mapping['Mois']]) if 'Mois' in mapping else ""
-        montant = float(row[mapping['Montant']]) if 'Montant' in mapping else 0.0
-        detail = str(row[mapping['Détail']]) if 'Détail' in mapping else ""
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO depenses 
-            (projet_id, annee, mois, montant, detail)
-            VALUES (?, ?, ?, ?, ?)
-        """, (projet_id, annee, mois, montant, detail))
-    
-    def _import_autres_depenses_row(self, cursor, row, mapping, projet_id):
-        """Importe une ligne d'autres dépenses"""
-        annee = int(row[mapping['Année']]) if 'Année' in mapping else None
-        ligne_index = int(row[mapping['Ligne']]) if 'Ligne' in mapping else 0
-        mois = str(row[mapping['Mois']]) if 'Mois' in mapping else ""
-        montant = float(row[mapping['Montant']]) if 'Montant' in mapping else 0.0
-        detail = str(row[mapping['Détail']]) if 'Détail' in mapping else ""
-        
-        cursor.execute("""
-            INSERT OR REPLACE INTO autres_depenses 
-            (projet_id, annee, ligne_index, mois, montant, detail)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (projet_id, annee, ligne_index, mois, montant, detail))
-
-
-class MatrixMappingWidget(QWidget):
-    """Widget spécialisé pour l'import de temps de travail en format matriciel"""
-    
-    def __init__(self, data_type, parent_dialog, projet_id):
-        super().__init__()
-        self.data_type = data_type
-        self.parent_dialog = parent_dialog
-        self.projet_id = projet_id
-        self.excel_sheets = {}
-        self.team_members = []
-        self.project_periods = []
-        
-        layout = QVBoxLayout()
-        
-        # === Configuration de base ===
-        basic_config = QGroupBox("Configuration de base")
-        basic_layout = QVBoxLayout()
-        
-        # Sélection feuille
-        sheet_layout = QHBoxLayout()
-        sheet_layout.addWidget(QLabel("Feuille Excel:"))
-        self.sheet_combo = QComboBox()
-        self.sheet_combo.currentTextChanged.connect(self.on_sheet_changed)
-        sheet_layout.addWidget(self.sheet_combo)
-        basic_layout.addLayout(sheet_layout)
-        
-        # Aperçu Excel
-        excel_preview_group = QGroupBox("Aperçu Excel")
-        excel_preview_layout = QVBoxLayout()
-        
-        self.excel_preview_table = QTableWidget()
-        self.excel_preview_table.setMaximumHeight(200)
-        excel_preview_layout.addWidget(self.excel_preview_table)
-        
-        excel_preview_group.setLayout(excel_preview_layout)
-        basic_layout.addWidget(excel_preview_group)
-        
-        basic_config.setLayout(basic_layout)
-        layout.addWidget(basic_config)
-        
-        # === Périodes du projet ===
-        periods_group = QGroupBox("Périodes du projet")
-        periods_layout = QVBoxLayout()
-        
-        self.periods_label = QLabel("Chargement des périodes...")
-        periods_layout.addWidget(self.periods_label)
-        
-        # Liste des périodes détectées
-        self.periods_list = QListWidget()
-        self.periods_list.setMaximumHeight(100)
-        periods_layout.addWidget(self.periods_list)
-        
-        periods_group.setLayout(periods_layout)
-        layout.addWidget(periods_group)
-        
-        # === Mapping Équipe → Excel ===
-        mapping_group = QGroupBox("Mapping Équipe → Excel")
-        mapping_layout = QVBoxLayout()
-        
-        # Scroll area pour les mappings
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        self.mapping_content = QWidget()
-        self.mapping_content_layout = QVBoxLayout()
-        self.mapping_content.setLayout(self.mapping_content_layout)
-        scroll.setWidget(self.mapping_content)
-        scroll.setMinimumHeight(300)
-        
-        mapping_layout.addWidget(scroll)
-        
-        # Boutons d'action
-        action_layout = QHBoxLayout()
-        self.btn_detect_structure = QPushButton("🔍 Détecter structure auto")
-        self.btn_reset_mapping = QPushButton("🔄 Reset mapping")
-        self.btn_test_extraction = QPushButton("👁️ Test extraction")
-        
-        self.btn_detect_structure.clicked.connect(self.detect_structure)
-        self.btn_reset_mapping.clicked.connect(self.reset_mapping)
-        self.btn_test_extraction.clicked.connect(self.test_extraction)
-        
-        action_layout.addWidget(self.btn_detect_structure)
-        action_layout.addWidget(self.btn_reset_mapping)
-        action_layout.addWidget(self.btn_test_extraction)
-        mapping_layout.addLayout(action_layout)
+    def setup_column_mapping_ui(self, parent_layout):
+        """Configure l'interface de mapping des colonnes"""
+        # Groupe pour le mapping
+        mapping_group = QGroupBox("Mapping des Colonnes")
+        mapping_layout = QFormLayout()
+        
+        # Colonnes obligatoires
+        self.direction_col_edit = QLineEdit()
+        mapping_layout.addRow("Colonne Direction:", self.direction_col_edit)
+        
+        self.categorie_col_edit = QLineEdit()
+        mapping_layout.addRow("Colonne Catégorie:", self.categorie_col_edit)
+        
+        self.annee_col_edit = QLineEdit()
+        mapping_layout.addRow("Colonne Année:", self.annee_col_edit)
+        
+        self.mois_col_edit = QLineEdit()
+        mapping_layout.addRow("Colonne Mois:", self.mois_col_edit)
+        
+        self.jours_col_edit = QLineEdit()
+        mapping_layout.addRow("Colonne Jours:", self.jours_col_edit)
+        
+        # Zone pour colonnes de mois (structure en colonnes)
+        self.month_columns_group = QGroupBox("Colonnes de Mois (pour structure en colonnes)")
+        self.month_columns_layout = QVBoxLayout()
+        self.month_columns_group.setLayout(self.month_columns_layout)
+        
+        add_month_btn = QPushButton("Ajouter Colonne Mois")
+        add_month_btn.clicked.connect(self.add_month_column)
+        self.month_columns_layout.addWidget(add_month_btn)
         
         mapping_group.setLayout(mapping_layout)
-        layout.addWidget(mapping_group)
-        
-        self.setLayout(layout)
-        
-        # Variables pour stocker les widgets de mapping
-        self.member_mapping_widgets = {}  # {member_id: {'position_combo': combo, 'period_mappings': {period: cellEdit}}}
-        
-        # Chargement initial
-        self.load_team_members()
-        self.load_project_periods()
+        parent_layout.addRow(mapping_group)
+        parent_layout.addRow(self.month_columns_group)
     
-    def load_team_members(self):
-        """Charge les membres de l'équipe du projet"""
-        try:
-            conn = sqlite3.connect('gestion_budget.db')
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT type, nombre, direction 
-                FROM equipe 
-                WHERE projet_id = ? AND nombre > 0
-            """, (self.projet_id,))
-            
-            self.team_members = []
-            member_id = 0
-            for type_person, nombre, direction in cursor.fetchall():
-                for i in range(nombre):
-                    member_id += 1
-                    self.team_members.append({
-                        'id': member_id,
-                        'type': type_person,
-                        'direction': direction,
-                        'index': i + 1,
-                        'display_name': f"{type_person} {i+1} ({direction})"
-                    })
-            
-            conn.close()
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Impossible de charger l'équipe: {e}")
-    
-    def load_project_periods(self):
-        """Génère les périodes basées sur les dates du projet"""
-        try:
-            conn = sqlite3.connect('gestion_budget.db')
-            cursor = conn.cursor()
-            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (self.projet_id,))
-            result = cursor.fetchone()
-            conn.close()
-            
-            if not result:
-                self.periods_label.setText("❌ Projet non trouvé")
-                return
-            
-            date_debut, date_fin = result
-            
-            # Parse des dates MM/yyyy
-            try:
-                debut_month, debut_year = map(int, date_debut.split('/'))
-                fin_month, fin_year = map(int, date_fin.split('/'))
-                
-                # Génère toutes les périodes
-                self.project_periods = []
-                current_year = debut_year
-                current_month = debut_month
-                
-                while (current_year < fin_year) or (current_year == fin_year and current_month <= fin_month):
-                    # Ajoute l'année si pas déjà présente
-                    year_period = f"{current_year}"
-                    if year_period not in [p['period'] for p in self.project_periods]:
-                        self.project_periods.append({
-                            'period': year_period,
-                            'type': 'année',
-                            'display': f"Année {current_year}"
-                        })
-                    
-                    # Ajoute le mois
-                    month_names = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
-                                  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre']
-                    month_period = f"{current_year}-{current_month:02d}"
-                    self.project_periods.append({
-                        'period': month_period,
-                        'type': 'mois',
-                        'display': f"{month_names[current_month]} {current_year}"
-                    })
-                    
-                    # Mois suivant
-                    current_month += 1
-                    if current_month > 12:
-                        current_month = 1
-                        current_year += 1
-                
-                # Met à jour l'affichage
-                self.periods_label.setText(f"✅ {len(self.project_periods)} périodes générées")
-                self.periods_list.clear()
-                for period in self.project_periods:
-                    self.periods_list.addItem(f"{period['display']} ({period['type']})")
-                
-                # Crée les widgets de mapping
-                self.create_mapping_widgets()
-                
-            except ValueError:
-                self.periods_label.setText("❌ Format de date invalide (attendu: MM/yyyy)")
-                
-        except Exception as e:
-            self.periods_label.setText(f"❌ Erreur: {e}")
-    
-    def create_mapping_widgets(self):
-        """Crée les widgets de mapping pour chaque membre d'équipe"""
-        # Nettoie les anciens widgets
-        while self.mapping_content_layout.count():
-            child = self.mapping_content_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        
-        self.member_mapping_widgets = {}
-        
-        for member in self.team_members:
-            member_id = member['id']
-            
-            # Groupe pour ce membre
-            member_group = QGroupBox(f"👤 {member['display_name']}")
-            member_layout = QVBoxLayout()
-            
-            # Position de base (ligne/colonne/cellule)
-            position_layout = QHBoxLayout()
-            position_layout.addWidget(QLabel("Position:"))
-            
-            # Type de position
-            position_type_combo = QComboBox()
-            position_type_combo.addItems(["Ligne", "Colonne", "Cellule fixe"])
-            position_layout.addWidget(position_type_combo)
-            
-            # Valeur de position
-            position_value_edit = QLineEdit()
-            position_value_edit.setPlaceholderText("Ex: 5, C, A5...")
-            position_layout.addWidget(position_value_edit)
-            
-            member_layout.addLayout(position_layout)
-            
-            # Mapping des périodes
-            periods_scroll = QScrollArea()
-            periods_scroll.setMaximumHeight(150)
-            periods_widget = QWidget()
-            periods_layout = QGridLayout()
-            periods_widget.setLayout(periods_layout)
-            periods_scroll.setWidget(periods_widget)
-            periods_scroll.setWidgetResizable(True)
-            
-            # Headers
-            periods_layout.addWidget(QLabel("Période"), 0, 0)
-            periods_layout.addWidget(QLabel("Cellule Excel"), 0, 1)
-            periods_layout.addWidget(QLabel("Auto"), 0, 2)
-            
-            # Widgets pour chaque période
-            period_mappings = {}
-            for row, period in enumerate(self.project_periods, 1):
-                # Nom de la période
-                periods_layout.addWidget(QLabel(period['display']), row, 0)
-                
-                # Cellule Excel
-                cell_edit = QLineEdit()
-                cell_edit.setPlaceholderText("Ex: B5, C10...")
-                periods_layout.addWidget(cell_edit, row, 1)
-                
-                # Bouton auto-calcul
-                auto_btn = QPushButton("🎯")
-                auto_btn.setMaximumWidth(30)
-                auto_btn.setToolTip("Calcul automatique basé sur la position")
-                auto_btn.clicked.connect(lambda checked, m=member_id, p=period['period']: self.auto_calculate_cell(m, p))
-                periods_layout.addWidget(auto_btn, row, 2)
-                
-                period_mappings[period['period']] = cell_edit
-            
-            member_layout.addWidget(periods_scroll)
-            
-            # Stocke les widgets
-            self.member_mapping_widgets[member_id] = {
-                'position_type_combo': position_type_combo,
-                'position_value_edit': position_value_edit,
-                'period_mappings': period_mappings,
-                'group_widget': member_group
-            }
-            
-            # Connexions pour auto-calcul
-            position_type_combo.currentTextChanged.connect(lambda: self.update_auto_calculations(member_id))
-            position_value_edit.textChanged.connect(lambda: self.update_auto_calculations(member_id))
-            
-            member_group.setLayout(member_layout)
-            self.mapping_content_layout.addWidget(member_group)
-    
-    def update_excel_data(self, excel_sheets):
-        """Met à jour les données Excel disponibles"""
-        self.excel_sheets = excel_sheets
-        
-        # Met à jour la liste des feuilles
-        self.sheet_combo.clear()
-        self.sheet_combo.addItems(list(excel_sheets.keys()))
-        
-        if excel_sheets:
-            self.on_sheet_changed()
-    
-    def on_sheet_changed(self):
-        """Appelé quand la feuille Excel change"""
-        self.update_excel_preview()
-    
-    def update_excel_preview(self):
-        """Met à jour l'aperçu Excel"""
-        sheet_name = self.sheet_combo.currentText()
-        if not sheet_name or not self.parent_dialog.excel_file:
-            return
-        
-        try:
-            # Lit un aperçu du fichier
-            df = pd.read_excel(
-                self.parent_dialog.excel_file,
-                sheet_name=sheet_name,
-                header=None,  # Pas d'en-tête auto
-                nrows=20  # Limite pour aperçu
-            )
-            
-            # Met à jour le tableau d'aperçu
-            self.excel_preview_table.setRowCount(min(20, len(df)))
-            self.excel_preview_table.setColumnCount(min(20, len(df.columns)))
-            
-            # Headers avec coordonnées
-            col_headers = [f"{chr(65 + i)}" for i in range(min(20, len(df.columns)))]
-            row_headers = [str(i + 1) for i in range(min(20, len(df)))]
-            
-            self.excel_preview_table.setHorizontalHeaderLabels(col_headers)
-            self.excel_preview_table.setVerticalHeaderLabels(row_headers)
-            
-            # Remplit les données
-            for row in range(min(20, len(df))):
-                for col in range(min(20, len(df.columns))):
-                    value = str(df.iloc[row, col])
-                    if value == 'nan':
-                        value = ''
-                    
-                    item = QTableWidgetItem(value)
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    
-                    # Coloration pour faciliter la lecture
-                    if row % 2 == 0:
-                        item.setBackground(Qt.GlobalColor.lightGray)
-                    
-                    self.excel_preview_table.setItem(row, col, item)
-            
-            # Ajuste les tailles
-            self.excel_preview_table.resizeColumnsToContents()
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Erreur lecture Excel: {e}")
-    
-    def auto_calculate_cell(self, member_id, period):
-        """Calcule automatiquement la cellule pour un membre et une période"""
-        if member_id not in self.member_mapping_widgets:
-            return
-        
-        widgets = self.member_mapping_widgets[member_id]
-        position_type = widgets['position_type_combo'].currentText()
-        position_value = widgets['position_value_edit'].text().strip()
-        
-        if not position_value:
-            QMessageBox.warning(self, "Erreur", "Définissez d'abord la position de base")
-            return
-        
-        try:
-            if position_type == "Ligne":
-                # Position = numéro de ligne, les colonnes varient par période
-                row_num = int(position_value)
-                # Trouve l'index de la période
-                period_index = next((i for i, p in enumerate(self.project_periods) if p['period'] == period), 0)
-                col_letter = chr(65 + period_index)  # A, B, C...
-                calculated_cell = f"{col_letter}{row_num}"
-                
-            elif position_type == "Colonne":
-                # Position = lettre de colonne, les lignes varient par période
-                col_letter = position_value.upper()
-                period_index = next((i for i, p in enumerate(self.project_periods) if p['period'] == period), 0)
-                row_num = period_index + 1  # 1, 2, 3...
-                calculated_cell = f"{col_letter}{row_num}"
-                
-            else:  # Cellule fixe
-                calculated_cell = position_value
-            
-            # Met à jour le champ
-            if period in widgets['period_mappings']:
-                widgets['period_mappings'][period].setText(calculated_cell)
-                
-        except Exception as e:
-            QMessageBox.warning(self, "Erreur", f"Calcul impossible: {e}")
-    
-    def update_auto_calculations(self, member_id):
-        """Met à jour tous les calculs automatiques pour un membre"""
-        # Déclenche le recalcul pour toutes les périodes
-        for period in [p['period'] for p in self.project_periods]:
-            self.auto_calculate_cell(member_id, period)
-    
-    def detect_structure(self):
-        """Détection automatique de la structure Excel"""
-        QMessageBox.information(self, "Détection auto", 
-                              "🚧 Fonctionnalité en développement\n\n"
-                              "Pour l'instant, configurez manuellement:\n"
-                              "1. Définissez la position de chaque membre\n"
-                              "2. Utilisez les boutons 🎯 pour le calcul auto")
-    
-    def reset_mapping(self):
-        """Remet à zéro tous les mappings"""
-        reply = QMessageBox.question(self, "Reset", 
-                                   "Effacer tous les mappings ?",
-                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            for member_id, widgets in self.member_mapping_widgets.items():
-                widgets['position_value_edit'].clear()
-                for cell_edit in widgets['period_mappings'].values():
-                    cell_edit.clear()
-    
-    def test_extraction(self):
-        """Test l'extraction des données avec la configuration actuelle"""
-        if not self.has_valid_mapping():
-            QMessageBox.warning(self, "Erreur", "Configurez d'abord le mapping")
-            return
-        
-        # Ouvre une dialog de prévisualisation
-        dialog = MatrixPreviewDialog(self, self.parent_dialog.excel_file, self.sheet_combo.currentText())
-        dialog.exec()
-    
-    def reset_configuration(self):
-        """Remet à zéro la configuration"""
-        self.sheet_combo.clear()
-        self.member_mapping_widgets = {}
-    
-    def get_configuration(self):
-        """Retourne la configuration actuelle"""
-        config = {
-            'sheet': self.sheet_combo.currentText(),
-            'team_mappings': {}
-        }
-        
-        for member_id, widgets in self.member_mapping_widgets.items():
-            member = next((m for m in self.team_members if m['id'] == member_id), None)
-            if member:
-                config['team_mappings'][member_id] = {
-                    'member_info': member,
-                    'position_type': widgets['position_type_combo'].currentText(),
-                    'position_value': widgets['position_value_edit'].text(),
-                    'period_mappings': {period: edit.text() for period, edit in widgets['period_mappings'].items()}
-                }
-        
-        return config
-    
-    def load_configuration(self, config):
-        """Charge une configuration"""
-        if 'sheet' in config:
-            self.sheet_combo.setCurrentText(config['sheet'])
-        
-        # TODO: Charger les mappings
-    
-    def has_valid_mapping(self):
-        """Vérifie si le mapping est valide"""
-        if not self.sheet_combo.currentText():
-            return False
-        
-        # Vérifie qu'au moins un membre a un mapping complet
-        for member_id, widgets in self.member_mapping_widgets.items():
-            if widgets['position_value_edit'].text().strip():
-                # Vérifie qu'au moins une période est mappée
-                for cell_edit in widgets['period_mappings'].values():
-                    if cell_edit.text().strip():
-                        return True
-        
-        return False
-    
-    def import_data_to_database(self, excel_file, projet_id):
-        """Importe les données dans la base de données"""
-        if not self.has_valid_mapping():
-            return False
-        
-        try:
-            # Lit le fichier Excel complet
-            df = pd.read_excel(
-                excel_file,
-                sheet_name=self.get_configuration()['sheet'],
-                header=None
-            )
-            
-            conn = sqlite3.connect('gestion_budget.db')
-            cursor = conn.cursor()
-            
-            imported_count = 0
-            
-            # Pour chaque membre de l'équipe
-            for member_id, widgets in self.member_mapping_widgets.items():
-                member = next((m for m in self.team_members if m['id'] == member_id), None)
-                if not member:
-                    continue
-                
-                # Pour chaque période mappée
-                for period, cell_edit in widgets['period_mappings'].items():
-                    cell_ref = cell_edit.text().strip()
-                    if not cell_ref:
-                        continue
-                    
-                    try:
-                        # Parse la référence de cellule (ex: B5)
-                        col_letter = ''.join(filter(str.isalpha, cell_ref))
-                        row_num = int(''.join(filter(str.isdigit, cell_ref)))
-                        
-                        # Convertit la lettre en index (A=0, B=1, etc.)
-                        col_index = ord(col_letter.upper()) - ord('A')
-                        row_index = row_num - 1  # Excel commence à 1, pandas à 0
-                        
-                        # Extrait la valeur
-                        if row_index < len(df) and col_index < len(df.columns):
-                            value = df.iloc[row_index, col_index]
-                            
-                            # Convertit en float si possible
-                            try:
-                                jours = float(value) if pd.notna(value) else 0.0
-                            except:
-                                jours = 0.0
-                            
-                            if jours > 0:
-                                # Détermine l'année et le mois
-                                if '-' in period:  # Format YYYY-MM
-                                    annee, mois = period.split('-')
-                                    annee = int(annee)
-                                    mois = int(mois)
-                                else:  # Format YYYY (année seule)
-                                    annee = int(period)
-                                    mois = 1  # Par défaut janvier
-                                
-                                # Insert dans la base
-                                cursor.execute("""
-                                    INSERT OR REPLACE INTO temps_travail 
-                                    (projet_id, annee, direction, categorie, mois, jours)
-                                    VALUES (?, ?, ?, ?, ?, ?)
-                                """, (projet_id, annee, member['direction'], member['type'], str(mois), jours))
-                                
-                                imported_count += 1
-                    
-                    except Exception as e:
-                        print(f"Erreur extraction {member['display_name']} - {period}: {e}")
-                        continue
-            
-            conn.commit()
-            conn.close()
-            
-            QMessageBox.information(self, "Import réussi", 
-                                  f"✅ {imported_count} données importées avec succès !")
-            return True
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Erreur d'import", f"❌ Erreur: {e}")
-            return False
-
-
-class MatrixPreviewDialog(QDialog):
-    """Dialog de prévisualisation des données matricielles"""
-    
-    def __init__(self, parent, excel_file, sheet_name):
-        super().__init__(parent)
-        self.parent_widget = parent
-        self.excel_file = excel_file
-        self.sheet_name = sheet_name
-        
-        self.setWindowTitle("👁️ Aperçu extraction matricielle")
-        self.setMinimumSize(1000, 600)
-        
+    def setup_import_tab(self):
+        """Configure l'onglet d'import"""
+        import_tab = QWidget()
         layout = QVBoxLayout()
         
-        # Info
-        info_label = QLabel(f"📊 Aperçu extraction - Feuille: {sheet_name}")
-        info_label.setStyleSheet("font-weight: bold; padding: 5px;")
-        layout.addWidget(info_label)
+        # Sélection du projet
+        project_layout = QHBoxLayout()
+        project_layout.addWidget(QLabel("Projet:"))
+        self.project_combo = QComboBox()
+        project_layout.addWidget(self.project_combo)
+        project_layout.addStretch()
+        layout.addLayout(project_layout)
+        
+        # Sélection du fichier Excel
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(QLabel("Fichier Excel:"))
+        self.file_path_edit = QLineEdit()
+        file_layout.addWidget(self.file_path_edit)
+        
+        browse_btn = QPushButton("Parcourir")
+        browse_btn.clicked.connect(self.browse_excel_file)
+        file_layout.addWidget(browse_btn)
+        
+        layout.addLayout(file_layout)
+        
+        # Options d'import
+        options_group = QGroupBox("Options d'Import")
+        options_layout = QFormLayout()
+        
+        self.sheet_combo = QComboBox()
+        options_layout.addRow("Feuille:", self.sheet_combo)
+        
+        self.header_row_spin = QSpinBox()
+        self.header_row_spin.setRange(0, 100)
+        self.header_row_spin.setValue(0)
+        options_layout.addRow("Ligne d'en-tête:", self.header_row_spin)
+        
+        self.skip_rows_spin = QSpinBox()
+        self.skip_rows_spin.setRange(0, 100)
+        options_layout.addRow("Lignes à ignorer:", self.skip_rows_spin)
+        
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+        
+        # Aperçu du fichier Excel
+        preview_group = QGroupBox("Aperçu du Fichier")
+        preview_layout = QVBoxLayout()
+        
+        self.excel_preview_table = QTableWidget()
+        preview_layout.addWidget(self.excel_preview_table)
+        
+        preview_group.setLayout(preview_layout)
+        layout.addWidget(preview_group)
+        
+        import_tab.setLayout(layout)
+        self.tab_widget.addTab(import_tab, "Import")
+    
+    def setup_preview_tab(self):
+        """Configure l'onglet de prévisualisation"""
+        preview_tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # Informations
+        info_layout = QHBoxLayout()
+        self.info_label = QLabel("Aucune donnée à prévisualiser")
+        info_layout.addWidget(self.info_label)
+        info_layout.addStretch()
+        layout.addLayout(info_layout)
         
         # Table de prévisualisation
         self.preview_table = QTableWidget()
+        self.preview_table.setColumnCount(6)
+        self.preview_table.setHorizontalHeaderLabels([
+            "Projet ID", "Année", "Direction", "Catégorie", "Mois", "Jours"
+        ])
         layout.addWidget(self.preview_table)
         
-        # Boutons
-        btn_layout = QHBoxLayout()
-        btn_close = QPushButton("Fermer")
-        btn_close.clicked.connect(self.close)
-        btn_layout.addWidget(btn_close)
-        layout.addLayout(btn_layout)
-        
-        self.setLayout(layout)
-        
-        # Charge l'aperçu
-        self.load_preview()
+        preview_tab.setLayout(layout)
+        self.tab_widget.addTab(preview_tab, "Prévisualisation")
     
-    def load_preview(self):
-        """Charge l'aperçu des données qui seraient extraites"""
+    def load_projects(self):
+        """Charge la liste des projets"""
+        projects = self.mapper.get_available_projects()
+        self.project_combo.clear()
+        for project_id, code, nom in projects:
+            self.project_combo.addItem(f"{code} - {nom}", project_id)
+    
+    def preselect_project(self, project_id):
+        """Pré-sélectionne un projet dans la liste"""
+        for i in range(self.project_combo.count()):
+            if self.project_combo.itemData(i) == project_id:
+                self.project_combo.setCurrentIndex(i)
+                break
+    
+    def load_configs(self):
+        """Charge la liste des configurations"""
+        configs = self.config_manager.list_configs()
+        self.config_combo.clear()
+        self.config_combo.addItem("-- Nouvelle configuration --", None)
+        for config in configs:
+            self.config_combo.addItem(config, config)
+    
+    def new_config(self):
+        """Crée une nouvelle configuration"""
+        self.config_combo.setCurrentIndex(0)
+        self.clear_config_form()
+    
+    def clear_config_form(self):
+        """Vide le formulaire de configuration"""
+        self.config_name_edit.clear()
+        self.description_edit.clear()
+        self.structure_combo.setCurrentText("rows")
+        self.direction_col_edit.clear()
+        self.categorie_col_edit.clear()
+        self.annee_col_edit.clear()
+        self.mois_col_edit.clear()
+        self.jours_col_edit.clear()
+        
+        # Nettoyer les colonnes de mois
+        while self.month_columns_layout.count() > 1:  # Garder le bouton "Ajouter"
+            child = self.month_columns_layout.takeAt(1)
+            if child.widget():
+                child.widget().deleteLater()
+    
+    def save_config(self):
+        """Sauvegarde la configuration actuelle"""
+        name = self.config_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Erreur", "Nom de configuration requis")
+            return
+        
+        config = self.build_config_from_form()
+        
+        if self.config_manager.save_config(name, config):
+            QMessageBox.information(self, "Succès", f"Configuration '{name}' sauvegardée")
+            self.load_configs()
+            # Sélectionner la config sauvegardée
+            index = self.config_combo.findData(name)
+            if index >= 0:
+                self.config_combo.setCurrentIndex(index)
+        else:
+            QMessageBox.critical(self, "Erreur", "Impossible de sauvegarder la configuration")
+    
+    def build_config_from_form(self) -> Dict:
+        """Construit la configuration à partir du formulaire"""
+        config = {
+            'name': self.config_name_edit.text().strip(),
+            'description': self.description_edit.toPlainText().strip(),
+            'data_structure': self.structure_combo.currentText(),
+            'column_mapping': {
+                'direction': {
+                    'column': self.direction_col_edit.text().strip() or None
+                },
+                'categorie': {
+                    'column': self.categorie_col_edit.text().strip() or None
+                },
+                'annee': {
+                    'column': self.annee_col_edit.text().strip() or None
+                },
+                'mois': {
+                    'column': self.mois_col_edit.text().strip() or None
+                },
+                'jours': {
+                    'column': self.jours_col_edit.text().strip() or None
+                }
+            },
+            'month_columns': []
+        }
+        
+        # Récupérer les colonnes de mois
+        for i in range(1, self.month_columns_layout.count()):
+            widget = self.month_columns_layout.itemAt(i).widget()
+            if hasattr(widget, 'get_config'):
+                month_config = widget.get_config()
+                if month_config:
+                    config['month_columns'].append(month_config)
+        
+        return config
+    
+    def load_selected_config(self):
+        """Charge la configuration sélectionnée"""
+        config_name = self.config_combo.currentData()
+        if config_name:
+            config = self.config_manager.load_config(config_name)
+            if config:
+                self.load_config_to_form(config)
+                self.current_config = config
+        else:
+            self.clear_config_form()
+            self.current_config = None
+    
+    def load_config_to_form(self, config: Dict):
+        """Charge une configuration dans le formulaire"""
+        self.config_name_edit.setText(config.get('name', ''))
+        self.description_edit.setPlainText(config.get('description', ''))
+        self.structure_combo.setCurrentText(config.get('data_structure', 'rows'))
+        
+        column_mapping = config.get('column_mapping', {})
+        self.direction_col_edit.setText(column_mapping.get('direction', {}).get('column', ''))
+        self.categorie_col_edit.setText(column_mapping.get('categorie', {}).get('column', ''))
+        self.annee_col_edit.setText(column_mapping.get('annee', {}).get('column', ''))
+        self.mois_col_edit.setText(column_mapping.get('mois', {}).get('column', ''))
+        self.jours_col_edit.setText(column_mapping.get('jours', {}).get('column', ''))
+        
+        # Charger les colonnes de mois
+        self.clear_month_columns()
+        for month_config in config.get('month_columns', []):
+            self.add_month_column(month_config)
+    
+    def delete_config(self):
+        """Supprime la configuration sélectionnée"""
+        config_name = self.config_combo.currentData()
+        if config_name:
+            reply = QMessageBox.question(
+                self, "Confirmation", 
+                f"Supprimer la configuration '{config_name}' ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                if self.config_manager.delete_config(config_name):
+                    QMessageBox.information(self, "Succès", "Configuration supprimée")
+                    self.load_configs()
+                else:
+                    QMessageBox.critical(self, "Erreur", "Impossible de supprimer la configuration")
+    
+    def on_structure_changed(self):
+        """Réagit au changement de structure de données"""
+        if self.structure_combo.currentText() == "columns":
+            self.month_columns_group.show()
+            self.mois_col_edit.setEnabled(False)
+        else:
+            self.month_columns_group.hide()
+            self.mois_col_edit.setEnabled(True)
+    
+    def add_month_column(self, config=None):
+        """Ajoute une colonne de mois"""
+        widget = MonthColumnWidget(config)
+        self.month_columns_layout.insertWidget(
+            self.month_columns_layout.count() - 1, widget
+        )
+    
+    def clear_month_columns(self):
+        """Vide les colonnes de mois"""
+        while self.month_columns_layout.count() > 1:
+            child = self.month_columns_layout.takeAt(1)
+            if child.widget():
+                child.widget().deleteLater()
+    
+    def browse_excel_file(self):
+        """Sélection du fichier Excel"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Sélectionner le fichier Excel",
+            "", "Fichiers Excel (*.xlsx *.xls);;Tous les fichiers (*)"
+        )
+        
+        if file_path:
+            self.file_path_edit.setText(file_path)
+            self.load_excel_preview(file_path)
+    
+    def load_excel_preview(self, file_path):
+        """Charge un aperçu du fichier Excel"""
         try:
-            # Récupère la configuration du parent
-            config = self.parent_widget.get_configuration()
+            # Lire les noms des feuilles
+            excel_file = pd.ExcelFile(file_path)
+            self.sheet_combo.clear()
+            self.sheet_combo.addItems(excel_file.sheet_names)
             
-            # Lit le fichier Excel
-            df = pd.read_excel(self.excel_file, sheet_name=self.sheet_name, header=None)
-            
-            # Prépare les données d'aperçu
-            preview_data = []
-            
-            for member_id, mapping in config['team_mappings'].items():
-                member_info = mapping['member_info']
-                
-                for period, cell_ref in mapping['period_mappings'].items():
-                    if not cell_ref.strip():
-                        continue
-                    
-                    try:
-                        # Parse la cellule
-                        col_letter = ''.join(filter(str.isalpha, cell_ref))
-                        row_num = int(''.join(filter(str.isdigit, cell_ref)))
-                        col_index = ord(col_letter.upper()) - ord('A')
-                        row_index = row_num - 1
-                        
-                        # Extrait la valeur
-                        value = "N/A"
-                        if row_index < len(df) and col_index < len(df.columns):
-                            raw_value = df.iloc[row_index, col_index]
-                            value = str(raw_value) if pd.notna(raw_value) else "0"
-                        
-                        preview_data.append([
-                            member_info['display_name'],
-                            period,
-                            cell_ref,
-                            value
-                        ])
-                    
-                    except Exception as e:
-                        preview_data.append([
-                            member_info['display_name'],
-                            period,
-                            cell_ref,
-                            f"Erreur: {e}"
-                        ])
-            
-            # Remplit le tableau
-            self.preview_table.setRowCount(len(preview_data))
-            self.preview_table.setColumnCount(4)
-            self.preview_table.setHorizontalHeaderLabels([
-                "Membre équipe", "Période", "Cellule Excel", "Valeur extraite"
-            ])
-            
-            for row, data in enumerate(preview_data):
-                for col, value in enumerate(data):
-                    item = QTableWidgetItem(str(value))
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    self.preview_table.setItem(row, col, item)
-            
-            self.preview_table.resizeColumnsToContents()
+            # Charger la première feuille
+            if excel_file.sheet_names:
+                self.load_sheet_preview(file_path, excel_file.sheet_names[0])
             
         except Exception as e:
-            QMessageBox.critical(self, "Erreur", f"Impossible de générer l'aperçu: {e}")
-
-
-class ManualMatchDialog(QDialog):
-    """Dialog pour le matching manuel entre équipe et personnes Excel"""
+            QMessageBox.critical(self, "Erreur", f"Impossible de lire le fichier Excel:\n{str(e)}")
     
-    def __init__(self, parent, team_members, found_persons):
-        super().__init__(parent)
-        self.team_members = team_members
-        self.found_persons = found_persons
-        self.mappings = {}
-        
-        self.setWindowTitle("Matching manuel des personnes")
-        self.setMinimumSize(800, 600)
-        
-        layout = QVBoxLayout()
-        
-        # Instructions
-        instructions = QLabel(
-            "Associez chaque personne de votre équipe avec une ligne de l'Excel.\n"
-            "Une personne de l'équipe peut rester non assignée si elle n'apparaît pas dans l'Excel."
-        )
-        layout.addWidget(instructions)
-        
-        # Table de matching
-        self.match_table = QTableWidget()
-        self.match_table.setColumnCount(3)
-        self.match_table.setHorizontalHeaderLabels([
-            "Membre de l'équipe", "Personne Excel", "Statut"
-        ])
-        self.match_table.setRowCount(len(team_members))
-        
-        # Remplit la table
-        for i, member in enumerate(team_members):
-            # Colonne 1: Membre équipe
-            item = QTableWidgetItem(member['display_name'])
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.match_table.setItem(i, 0, item)
-            
-            # Colonne 2: Combo pour sélectionner la personne Excel
-            combo = QComboBox()
-            combo.addItem("-- Non assigné --")
-            for person in found_persons:
-                combo.addItem(f"Ligne {person['row']}: {person['nom']}")
-            self.match_table.setCellWidget(i, 1, combo)
-            
-            # Colonne 3: Statut
-            status_item = QTableWidgetItem("Non assigné")
-            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.match_table.setItem(i, 2, status_item)
-            
-            # Connexion pour mise à jour du statut
-            combo.currentTextChanged.connect(lambda text, row=i: self.update_status(row, text))
-        
-        layout.addWidget(self.match_table)
-        
-        # Boutons
-        btn_layout = QHBoxLayout()
-        btn_auto = QPushButton("Auto-matching par nom")
-        btn_ok = QPushButton("Valider")
-        btn_cancel = QPushButton("Annuler")
-        
-        btn_auto.clicked.connect(self.auto_match_by_name)
-        btn_ok.clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
-        
-        btn_layout.addWidget(btn_auto)
-        btn_layout.addWidget(btn_ok)
-        btn_layout.addWidget(btn_cancel)
-        layout.addLayout(btn_layout)
-        
-        self.setLayout(layout)
-    
-    def update_status(self, row, text):
-        """Met à jour le statut d'une ligne"""
-        if text == "-- Non assigné --":
-            status = "Non assigné"
-        else:
-            status = "Assigné"
-        
-        self.match_table.setItem(row, 2, QTableWidgetItem(status))
-    
-    def auto_match_by_name(self):
-        """Tentative de matching automatique par similarité de nom"""
-        for i, member in enumerate(self.team_members):
-            combo = self.match_table.cellWidget(i, 1)
-            member_type = member['type'].lower()
-            
-            # Cherche une correspondance partielle dans les noms Excel
-            best_match = None
-            for j, person in enumerate(self.found_persons):
-                person_nom = person['nom'].lower()
-                # Logique simple: cherche le type dans le nom
-                if member_type in person_nom:
-                    best_match = j + 1  # +1 car index 0 = "Non assigné"
-                    break
-            
-            if best_match:
-                combo.setCurrentIndex(best_match)
-    
-    def get_mappings(self):
-        """Retourne les mappings configurés"""
-        mappings = {}
-        for i, member in enumerate(self.team_members):
-            combo = self.match_table.cellWidget(i, 1)
-            if combo.currentIndex() > 0:  # Pas "Non assigné"
-                person_idx = combo.currentIndex() - 1
-                person = self.found_persons[person_idx]
-                mappings[person['excel_row']] = {
-                    'team_member': member,
-                    'excel_person': person
-                }
-        return mappings
-
-
-class DataPreviewDialog(QDialog):
-    """Dialog d'aperçu des données extraites"""
-    
-    def __init__(self, parent, excel_file, sheet_name):
-        super().__init__(parent)
-        self.setWindowTitle("Aperçu des données extraites")
-        self.setMinimumSize(1000, 600)
-        
-        layout = QVBoxLayout()
-        
-        # TODO: Implémenter l'aperçu des données matricielles
-        info = QLabel("Aperçu des données matricielles - En cours de développement")
-        layout.addWidget(info)
-        
-        btn_close = QPushButton("Fermer")
-        btn_close.clicked.connect(self.close)
-        layout.addWidget(btn_close)
-        
-        self.setLayout(layout)
-
-
-class PreviewDialog(QDialog):
-    def __init__(self, parent, excel_file, mapping_widgets, projet_id):
-        super().__init__(parent)
-        self.setWindowTitle("Aperçu des données à importer")
-        self.setMinimumSize(1000, 600)
-        
-        layout = QVBoxLayout()
-        
-        # Onglets pour chaque type de données
-        tabs = QTabWidget()
-        
-        for data_type, widget in mapping_widgets.items():
-            if widget.has_valid_mapping():
-                preview_widget = self._create_preview_widget(excel_file, widget, projet_id)
-                tabs.addTab(preview_widget, data_type.replace('_', ' ').title())
-        
-        layout.addWidget(tabs)
-        
-        # Bouton fermer
-        btn_close = QPushButton("Fermer")
-        btn_close.clicked.connect(self.close)
-        layout.addWidget(btn_close)
-        
-        self.setLayout(layout)
-    
-    def _create_preview_widget(self, excel_file, mapping_widget, projet_id):
-        """Crée un widget d'aperçu pour un type de données"""
-        widget = QWidget()
-        layout = QVBoxLayout()
-        
+    def load_sheet_preview(self, file_path, sheet_name):
+        """Charge un aperçu d'une feuille spécifique"""
         try:
-            config = mapping_widget.get_configuration()
-            
-            # Calcule les lignes à ignorer entre l'en-tête et le début des données
-            header_row = config['header_row']
-            data_start_row = config['data_start_row']
-            
-            if data_start_row > header_row + 1:
-                skip_rows = list(range(header_row + 1, data_start_row))
-            else:
-                skip_rows = None
-            
-            # Lit les données
+            # Lire un échantillon de la feuille
             df = pd.read_excel(
-                excel_file,
-                sheet_name=config['sheet'],
-                header=header_row,
-                skiprows=skip_rows,
+                file_path,
+                sheet_name=sheet_name,
+                header=self.header_row_spin.value(),
+                skiprows=self.skip_rows_spin.value(),
                 nrows=20  # Limite pour l'aperçu
             )
             
-            # Applique le filtre si spécifié
-            if config['filter'].strip():
-                df = df.query(config['filter'])
+            # Afficher dans le tableau
+            self.excel_preview_table.setRowCount(len(df))
+            self.excel_preview_table.setColumnCount(len(df.columns))
+            self.excel_preview_table.setHorizontalHeaderLabels([str(col) for col in df.columns])
             
-            # Affiche les informations
-            info_label = QLabel(f"Feuille: {config['sheet']} | Lignes trouvées: {len(df)}")
-            layout.addWidget(info_label)
+            for row in range(len(df)):
+                for col in range(len(df.columns)):
+                    value = df.iloc[row, col]
+                    self.excel_preview_table.setItem(
+                        row, col, QTableWidgetItem(str(value) if pd.notna(value) else "")
+                    )
             
-            # Tableau d'aperçu
-            table = QTableWidget()
-            table.setRowCount(min(10, len(df)))
-            
-            # Colonnes mappées seulement
-            mapped_columns = []
-            for field, mapping in config['mappings'].items():
-                if mapping['excel_column'] != "-- Non mappé --":
-                    mapped_columns.append((field, mapping['excel_column']))
-            
-            table.setColumnCount(len(mapped_columns))
-            table.setHorizontalHeaderLabels([f"{field}\n({col})" for field, col in mapped_columns])
-            
-            # Remplit le tableau
-            for row in range(min(10, len(df))):
-                for col, (field, excel_col) in enumerate(mapped_columns):
-                    if excel_col in df.columns:
-                        value = str(df.iloc[row][excel_col])
-                        item = QTableWidgetItem(value)
-                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                        table.setItem(row, col, item)
-            
-            layout.addWidget(table)
+            self.current_df = df
             
         except Exception as e:
-            error_label = QLabel(f"Erreur: {e}")
-            layout.addWidget(error_label)
+            QMessageBox.critical(self, "Erreur", f"Impossible de lire la feuille:\n{str(e)}")
+    
+    def test_configuration(self):
+        """Teste la configuration avec le fichier Excel"""
+        if not self.file_path_edit.text():
+            QMessageBox.warning(self, "Erreur", "Sélectionnez un fichier Excel")
+            return
         
-        widget.setLayout(layout)
-        return widget
+        if not self.config_name_edit.text().strip():
+            QMessageBox.warning(self, "Erreur", "Définissez un nom de configuration")
+            return
+        
+        projet_id = self.project_combo.currentData()
+        if not projet_id:
+            QMessageBox.warning(self, "Erreur", "Sélectionnez un projet")
+            return
+        
+        try:
+            # Construire la configuration
+            config = self.build_config_from_form()
+            
+            # Lire le fichier Excel complet
+            df = pd.read_excel(
+                self.file_path_edit.text(),
+                sheet_name=self.sheet_combo.currentText(),
+                header=self.header_row_spin.value(),
+                skiprows=self.skip_rows_spin.value()
+            )
+            
+            # Traiter les données
+            results = self.mapper.process_excel_data(df, config, projet_id)
+            
+            # Afficher la prévisualisation
+            self.show_preview(results)
+            self.tab_widget.setCurrentIndex(2)  # Aller à l'onglet preview
+            
+            if results:
+                self.import_btn.setEnabled(True)
+                QMessageBox.information(
+                    self, "Test réussi", 
+                    f"Configuration testée avec succès!\n{len(results)} entrées détectées."
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Aucune donnée", 
+                    "Aucune donnée valide détectée avec cette configuration."
+                )
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur de test", f"Erreur lors du test:\n{str(e)}")
+            traceback.print_exc()
+    
+    def show_preview(self, results):
+        """Affiche la prévisualisation des données"""
+        self.preview_table.setRowCount(len(results))
+        self.info_label.setText(f"Prévisualisation: {len(results)} entrées détectées")
+        
+        for row, entry in enumerate(results):
+            self.preview_table.setItem(row, 0, QTableWidgetItem(str(entry['projet_id'])))
+            self.preview_table.setItem(row, 1, QTableWidgetItem(str(entry['annee'])))
+            self.preview_table.setItem(row, 2, QTableWidgetItem(entry['direction']))
+            self.preview_table.setItem(row, 3, QTableWidgetItem(entry['categorie']))
+            self.preview_table.setItem(row, 4, QTableWidgetItem(entry['mois']))
+            self.preview_table.setItem(row, 5, QTableWidgetItem(str(entry['jours'])))
+        
+        self.preview_data = results
+    
+    def perform_import(self):
+        """Effectue l'import des données"""
+        if not hasattr(self, 'preview_data') or not self.preview_data:
+            QMessageBox.warning(self, "Erreur", "Aucune donnée à importer. Testez d'abord la configuration.")
+            return
+        
+        reply = QMessageBox.question(
+            self, "Confirmation d'import",
+            f"Importer {len(self.preview_data)} entrées dans la base de données ?\n\n"
+            "Les données existantes avec les mêmes clés seront remplacées.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            success, message = self.mapper.save_to_database(self.preview_data)
+            
+            if success:
+                QMessageBox.information(self, "Import réussi", message)
+                self.import_btn.setEnabled(False)
+                self.preview_data = []
+            else:
+                QMessageBox.critical(self, "Erreur d'import", message)
+
+class MonthColumnWidget(QWidget):
+    """Widget pour configurer une colonne de mois"""
+    
+    def __init__(self, config=None):
+        super().__init__()
+        layout = QHBoxLayout()
+        
+        layout.addWidget(QLabel("Colonne:"))
+        self.column_edit = QLineEdit()
+        layout.addWidget(self.column_edit)
+        
+        layout.addWidget(QLabel("Mois:"))
+        self.month_combo = QComboBox()
+        self.month_combo.addItems([
+            "01", "02", "03", "04", "05", "06",
+            "07", "08", "09", "10", "11", "12"
+        ])
+        layout.addWidget(self.month_combo)
+        
+        remove_btn = QPushButton("X")
+        remove_btn.setMaximumWidth(30)
+        remove_btn.clicked.connect(self.remove_self)
+        layout.addWidget(remove_btn)
+        
+        self.setLayout(layout)
+        
+        if config:
+            self.column_edit.setText(config.get('column', ''))
+            month_value = config.get('month', '01')
+            if isinstance(month_value, int):
+                month_value = f"{month_value:02d}"
+            index = self.month_combo.findText(str(month_value))
+            if index >= 0:
+                self.month_combo.setCurrentIndex(index)
+    
+    def get_config(self):
+        """Retourne la configuration de cette colonne"""
+        column = self.column_edit.text().strip()
+        if column:
+            return {
+                'column': column,
+                'month': self.month_combo.currentText()
+            }
+        return None
+    
+    def remove_self(self):
+        """Supprime ce widget"""
+        self.deleteLater()
+
+# Fonction principale pour lancer l'interface
+def open_excel_import_dialog(parent=None, preselected_project_id=None):
+    """Ouvre la boîte de dialogue d'import Excel"""
+    dialog = ExcelImportDialog(parent)
+    
+    # Pré-sélectionner le projet si fourni
+    if preselected_project_id:
+        dialog.preselect_project(preselected_project_id)
+    
+    return dialog.exec()
+
+if __name__ == "__main__":
+    from PyQt6.QtWidgets import QApplication
+    import sys
+    
+    app = QApplication(sys.argv)
+    open_excel_import_dialog()
+    sys.exit(app.exec())

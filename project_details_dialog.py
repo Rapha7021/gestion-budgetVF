@@ -202,9 +202,21 @@ class ProjectDetailsDialog(QDialog):
         self.setLayout(main_layout)
 
     def handle_import_excel(self):
-        from excel_import import ExcelImportDialog
-        dlg = ExcelImportDialog(self.projet_id, self)
-        dlg.exec()
+        """Ouvre l'interface d'import Excel configurable avec le projet pré-sélectionné"""
+        try:
+            from excel_import import open_excel_import_dialog
+            open_excel_import_dialog(self, self.projet_id)
+        except ImportError as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Impossible de charger le module d'import Excel:\n{str(e)}\n\n"
+                "Assurez-vous que pandas est installé et que le fichier excel_import.py est présent."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Erreur lors de l'ouverture de l'import Excel:\n{str(e)}"
+            )
 
     def load_actualites(self):
         self.actualites_list.clear()
