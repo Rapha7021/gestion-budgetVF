@@ -2,10 +2,13 @@ import sqlite3
 import datetime
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
                             QTableWidgetItem, QPushButton, QMessageBox, 
-                            QFileDialog, QHeaderView)
+                            QFileDialog, QHeaderView, QGroupBox, QGridLayout, 
+                            QColorDialog, QLineEdit, QComboBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+import traceback
+import re
 
 DB_PATH = 'gestion_budget.db'
 
@@ -30,6 +33,47 @@ class CompteResultatDisplay(QDialog):
         
         self.init_ui()
         self.load_data()
+    
+    def load_export_settings(self):
+        """Charge les paramètres d'export depuis la base de données"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT * FROM export_settings WHERE id = 1')
+            result = cursor.fetchone()
+            
+            if result:
+                settings = type('Settings', (), {})()
+                settings.title_color = result[1]
+                settings.header_color = result[2]
+                settings.total_color = result[3]
+                settings.result_color = result[4]
+                settings.logo_path = result[5]
+                settings.logo_position = result[6]
+            else:
+                # Paramètres par défaut
+                settings = type('Settings', (), {})()
+                settings.title_color = '#2c3e50'
+                settings.header_color = '#34495e'
+                settings.total_color = '#3498db'
+                settings.result_color = '#2ecc71'
+                settings.logo_path = ''
+                settings.logo_position = 'Haut gauche'
+            
+            conn.close()
+            return settings
+            
+        except Exception:
+            # En cas d'erreur, utiliser les paramètres par défaut
+            settings = type('Settings', (), {})()
+            settings.title_color = '#2c3e50'
+            settings.header_color = '#34495e'
+            settings.total_color = '#3498db'
+            settings.result_color = '#2ecc71'
+            settings.logo_path = ''
+            settings.logo_position = 'Haut gauche'
+            return settings
     
     def check_cir_projects(self):
         """Vérifie si au moins un projet a le CIR activé"""
@@ -223,6 +267,12 @@ class CompteResultatDisplay(QDialog):
         pdf_btn.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; font-weight: bold; padding: 8px; }")
         buttons_layout.addWidget(pdf_btn)
         
+        # Paramètres Export
+        settings_btn = QPushButton("Paramètres Export")
+        settings_btn.clicked.connect(self.open_export_settings)
+        settings_btn.setStyleSheet("QPushButton { background-color: #9b59b6; color: white; font-weight: bold; padding: 8px; }")
+        buttons_layout.addWidget(settings_btn)
+        
         # Imprimer
         print_btn = QPushButton("Imprimer")
         print_btn.clicked.connect(self.print_compte_resultat)
@@ -237,6 +287,12 @@ class CompteResultatDisplay(QDialog):
         buttons_layout.addWidget(close_btn)
         
         return buttons_layout
+    
+    def open_export_settings(self):
+        """Ouvre le dialogue des paramètres d'export"""
+        dialog = ExportSettingsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            QMessageBox.information(self, "Paramètres", "Paramètres d'export sauvegardés avec succès!")
     
     def load_data(self):
         """Charge et affiche les données du compte de résultat"""
@@ -442,6 +498,62 @@ class CompteResultatDisplay(QDialog):
             'cout_complet': 'Coût complet'
         }
         return cost_type_mapping.get(self.cost_type, 'Coût direct')
+    
+    def generate_filename(self, extension):
+        """Génère un nom de fichier basé sur la configuration"""
+        # 1. Partie projets
+        if len(self.project_ids) <= 3:
+            # Récupérer les codes des projets
+            project_codes = []
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            try:
+                for project_id in self.project_ids:
+                    cursor.execute("SELECT code FROM projets WHERE id = ?", (project_id,))
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        # Nettoyer le code projet pour le nom de fichier
+                        clean_code = re.sub(r'[^\w\-_]', '', result[0])
+                        project_codes.append(clean_code)
+                    else:
+                        project_codes.append(f"PROJ{project_id}")
+            finally:
+                conn.close()
+            
+            projects_part = "_".join(project_codes) if project_codes else "projets"
+        else:
+            projects_part = "multi_projets"
+        
+        # 2. Partie années
+        if len(self.years) == 1:
+            years_part = str(self.years[0])
+        else:
+            years_sorted = sorted(self.years)
+            years_part = f"{years_sorted[0]}_{years_sorted[-1]}"
+        
+        # 3. Partie granularité
+        granularity_part = "mensuel" if self.granularity == 'monthly' else "annuel"
+        
+        # 4. Partie type de coût (version courte pour le nom de fichier)
+        cost_type_mapping = {
+            'montant_charge': 'montant_charge',
+            'cout_production': 'cout_production', 
+            'cout_complet': 'cout_complet'
+        }
+        cost_part = cost_type_mapping.get(self.cost_type, 'cout_production')
+        
+        # 5. Assembler le nom de fichier
+        filename = f"compte_resultat_{projects_part}_{years_part}_{granularity_part}_{cost_part}.{extension}"
+        
+        # 6. Nettoyer le nom de fichier pour Windows
+        # Remplacer les caractères problématiques
+        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+        # Limiter la longueur (255 caractères max pour Windows)
+        if len(filename) > 255:
+            base_name = filename[:255-len(extension)-1]
+            filename = f"{base_name}.{extension}"
+        
+        return filename
 
     def calculate_distributed_cir(self, cursor, target_year, target_month=None):
         """
@@ -756,10 +868,16 @@ class CompteResultatDisplay(QDialog):
             from openpyxl import Workbook
             from openpyxl.styles import Font, Alignment, PatternFill
             
+            # Charger les paramètres d'export
+            settings = self.load_export_settings()
+            
+            # Générer le nom de fichier basé sur la configuration
+            default_filename = self.generate_filename("xlsx")
+            
             file_path, _ = QFileDialog.getSaveFileName(
                 self, 
                 "Exporter le compte de résultat",
-                f"compte_resultat_consolide.xlsx",
+                default_filename,
                 "Fichiers Excel (*.xlsx)"
             )
             
@@ -770,12 +888,168 @@ class CompteResultatDisplay(QDialog):
             ws = wb.active
             ws.title = "Compte de Résultat"
             
+            # Convertir les couleurs hex en couleurs openpyxl (sans le #)
+            def hex_to_openpyxl(hex_color):
+                return hex_color.lstrip('#').upper()
+            
+            # Déterminer la structure selon la présence du logo
+            if settings.logo_path and settings.logo_path.strip():
+                # Titre
+                title_cell = ws.cell(row=1, column=1)
+                title_cell.value = f"COMPTE DE RÉSULTAT"
+                title_color = hex_to_openpyxl(settings.title_color)
+                title_cell.font = Font(bold=True, size=16, color=title_color)
+                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=self.table.columnCount())
+                
+                # Sous-titre avec informations
+                subtitle_cell = ws.cell(row=2, column=1)
+                subtitle_cell.value = self.get_selection_info()
+                subtitle_cell.font = Font(size=10, color="666666")
+                ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=self.table.columnCount())
+                
+                # Essayer d'insérer le logo comme image
+                try:
+                    import os
+                    from openpyxl.drawing.image import Image
+                    
+                    if os.path.exists(settings.logo_path):
+                        logo_img = Image(settings.logo_path)
+                        
+                        # Redimensionner le logo (max 100px de hauteur)
+                        max_height = 100
+                        if logo_img.height > max_height:
+                            ratio = max_height / logo_img.height
+                            logo_img.height = max_height
+                            logo_img.width = int(logo_img.width * ratio)
+                        
+                        # Position selon le paramètre
+                        if settings.logo_position == "Haut droite":
+                            logo_img.anchor = f"{chr(65 + self.table.columnCount() - 1)}3"  # Dernière colonne
+                        elif settings.logo_position == "Haut centre":
+                            middle_col = self.table.columnCount() // 2
+                            logo_img.anchor = f"{chr(65 + middle_col)}3"
+                        else:  # Haut gauche par défaut
+                            logo_img.anchor = "A3"
+                        
+                        ws.add_image(logo_img)
+                        
+                        # Ajuster la hauteur des lignes pour le logo
+                        ws.row_dimensions[3].height = max(60, logo_img.height * 0.75)
+                        ws.row_dimensions[4].height = 20
+                        
+                        header_row = 5
+                    else:
+                        # Si le fichier n'existe pas, juste noter le nom
+                        logo_note_cell = ws.cell(row=3, column=1)
+                        logo_name = os.path.basename(settings.logo_path)
+                        logo_note_cell.value = f"Logo configuré: {logo_name} (Position: {settings.logo_position})"
+                        logo_note_cell.font = Font(italic=True, size=9, color="999999")
+                        header_row = 4
+                        
+                except ImportError:
+                    # Si openpyxl.drawing.image n'est pas disponible
+                    logo_note_cell = ws.cell(row=3, column=1)
+                    logo_note_cell.value = f"Logo: {os.path.basename(settings.logo_path)} (Position: {settings.logo_position})"
+                    logo_note_cell.font = Font(italic=True, size=9, color="999999")
+                    header_row = 4
+                except Exception:
+                    # Autre erreur avec le logo
+                    header_row = 3
+            else:
+                header_row = 1
+            
+            # Exporter les en-têtes de colonnes à la bonne ligne
+            for col in range(self.table.columnCount()):
+                header_item = self.table.horizontalHeaderItem(col)
+                cell = ws.cell(row=header_row, column=col+1)
+                cell.value = header_item.text() if header_item else ""
+                cell.font = Font(bold=True, color="FFFFFF")
+                header_color = hex_to_openpyxl(settings.header_color)
+                cell.fill = PatternFill(start_color=header_color, end_color=header_color, fill_type="solid")
+                cell.alignment = Alignment(horizontal='center')
+            
             # Exporter les données du tableau
+            data_start_row = header_row + 1
             for row in range(self.table.rowCount()):
                 for col in range(self.table.columnCount()):
                     item = self.table.item(row, col)
-                    if item:
-                        ws.cell(row + 1, col + 1, item.text())
+                    cell = ws.cell(row=data_start_row + row, column=col+1)
+                    
+                    if item and item.text():
+                        # Pour la première colonne (postes), garder le texte
+                        if col == 0:
+                            cell.value = item.text()
+                            # Appliquer le style selon le type de ligne
+                            if "PRODUITS" in item.text() or "CHARGES" in item.text():
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                header_color = hex_to_openpyxl(settings.header_color)
+                                cell.fill = PatternFill(start_color=header_color, end_color=header_color, fill_type="solid")
+                            elif "TOTAL" in item.text():
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                total_color = hex_to_openpyxl(settings.total_color)
+                                cell.fill = PatternFill(start_color=total_color, end_color=total_color, fill_type="solid")
+                            elif "RÉSULTAT" in item.text():
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                result_color = hex_to_openpyxl(settings.result_color)
+                                cell.fill = PatternFill(start_color=result_color, end_color=result_color, fill_type="solid")
+                        else:
+                            # Pour les colonnes de données, convertir en nombre si possible
+                            try:
+                                # Enlever les espaces et virgules pour la conversion
+                                value_str = item.text().replace(",", "").replace(" ", "")
+                                if value_str:
+                                    cell.value = float(value_str)
+                                    cell.number_format = '#,##0.00'
+                                else:
+                                    cell.value = ""
+                            except ValueError:
+                                cell.value = item.text()
+                            
+                            cell.alignment = Alignment(horizontal='right')
+                            
+                            # Appliquer les couleurs aux colonnes de données selon le type de ligne
+                            first_col_item = self.table.item(row, 0)
+                            if first_col_item:
+                                first_col_text = first_col_item.text()
+                                if "PRODUITS" in first_col_text or "CHARGES" in first_col_text:
+                                    cell.font = Font(bold=True, color="FFFFFF")
+                                    header_color = hex_to_openpyxl(settings.header_color)
+                                    cell.fill = PatternFill(start_color=header_color, end_color=header_color, fill_type="solid")
+                                elif "TOTAL" in first_col_text:
+                                    cell.font = Font(bold=True, color="FFFFFF")
+                                    total_color = hex_to_openpyxl(settings.total_color)
+                                    cell.fill = PatternFill(start_color=total_color, end_color=total_color, fill_type="solid")
+                                elif "RÉSULTAT" in first_col_text:
+                                    cell.font = Font(bold=True, color="FFFFFF")
+                                    result_color = hex_to_openpyxl(settings.result_color)
+                                    cell.fill = PatternFill(start_color=result_color, end_color=result_color, fill_type="solid")
+            
+            # Ajuster la largeur des colonnes
+            try:
+                for col_num in range(1, self.table.columnCount() + 1):
+                    max_length = 0
+                    for row_num in range(1, ws.max_row + 1):
+                        try:
+                            cell = ws.cell(row=row_num, column=col_num)
+                            if cell.value and not hasattr(cell, '_merge_parent'):  # Éviter les cellules fusionnées
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                        except:
+                            continue
+                    
+                    # Calculer la lettre de colonne
+                    if col_num <= 26:
+                        column_letter = chr(64 + col_num)  # A, B, C, etc.
+                    else:
+                        column_letter = chr(64 + (col_num - 1) // 26) + chr(65 + (col_num - 1) % 26)
+                    
+                    adjusted_width = min(max(max_length + 2, 10), 50)
+                    ws.column_dimensions[column_letter].width = adjusted_width
+            except Exception as e:
+                # Si l'ajustement automatique échoue, utiliser des largeurs fixes
+                for i in range(self.table.columnCount()):
+                    column_letter = chr(65 + i)  # A, B, C, etc.
+                    ws.column_dimensions[column_letter].width = 20
             
             wb.save(file_path)
             QMessageBox.information(self, "Export réussi", f"Fichier exporté: {file_path}")
@@ -789,12 +1063,14 @@ class CompteResultatDisplay(QDialog):
         """Exporte vers PDF"""
         try:
             from PyQt6.QtGui import QTextDocument
-            from PyQt6.QtCore import QMarginsF
+            
+            # Générer le nom de fichier basé sur la configuration
+            default_filename = self.generate_filename("pdf")
             
             file_path, _ = QFileDialog.getSaveFileName(
                 self, 
                 "Exporter le compte de résultat",
-                f"compte_resultat_consolide.pdf",
+                default_filename,
                 "Fichiers PDF (*.pdf)"
             )
             
@@ -804,7 +1080,8 @@ class CompteResultatDisplay(QDialog):
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(file_path)
-            printer.setPageMargins(QMarginsF(15, 15, 15, 15), QPrinter.Unit.Millimeter)
+            
+            # Ne pas définir de marges personnalisées pour éviter les problèmes de compatibilité
             
             html_content = self.generate_html_content()
             
@@ -840,25 +1117,70 @@ class CompteResultatDisplay(QDialog):
     
     def generate_html_content(self):
         """Génère le contenu HTML pour l'export"""
-        html = """
+        # Charger les paramètres d'export
+        settings = self.load_export_settings()
+        
+        # Gérer le logo
+        logo_html = ""
+        if settings.logo_path and settings.logo_path.strip():
+            import os
+            import base64
+            
+            try:
+                if os.path.exists(settings.logo_path):
+                    with open(settings.logo_path, 'rb') as image_file:
+                        encoded_string = base64.b64encode(image_file.read()).decode()
+                    
+                    # Déterminer le type MIME
+                    ext = os.path.splitext(settings.logo_path)[1].lower()
+                    mime_type = {
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.gif': 'image/gif',
+                        '.bmp': 'image/bmp'
+                    }.get(ext, 'image/png')
+                    
+                    # Position du logo
+                    position_style = {
+                        'Haut gauche': 'float: left;',
+                        'Haut droite': 'float: right;',
+                        'Haut centre': 'display: block; margin: 0 auto;'
+                    }.get(settings.logo_position, 'float: left;')
+                    
+                    logo_html = f"""
+                    <div style="margin-bottom: 20px;">
+                        <img src="data:{mime_type};base64,{encoded_string}" 
+                             style="max-height: 80px; max-width: 200px; {position_style}" 
+                             alt="Logo">
+                    </div>
+                    """
+            except Exception:
+                # Si le logo ne peut pas être chargé, on continue sans
+                pass
+        
+        html = f"""
         <html>
         <head>
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                h1 { text-align: center; color: #2c3e50; }
-                h2 { text-align: center; color: #7f8c8d; font-size: 12pt; }
-                table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-                th, td { border: 1px solid #bdc3c7; padding: 8px; text-align: left; }
-                th { background-color: #ecf0f1; font-weight: bold; }
-                .header { background-color: #34495e; color: white; font-weight: bold; }
-                .total { background-color: #3498db; color: white; font-weight: bold; }
-                .result { background-color: #2ecc71; color: white; font-weight: bold; }
-                .amount { text-align: right; }
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ text-align: center; color: {settings.title_color}; }}
+                h2 {{ text-align: center; color: #7f8c8d; font-size: 12pt; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+                th, td {{ border: 1px solid #bdc3c7; padding: 8px; text-align: left; }}
+                th {{ background-color: {settings.header_color}; color: white; font-weight: bold; }}
+                .header {{ background-color: {settings.header_color}; color: white; font-weight: bold; }}
+                .total {{ background-color: {settings.total_color}; color: white; font-weight: bold; }}
+                .result {{ background-color: {settings.result_color}; color: white; font-weight: bold; }}
+                .amount {{ text-align: right; }}
+                .logo-container {{ overflow: auto; margin-bottom: 20px; }}
             </style>
         </head>
         <body>
-            <h1>COMPTE DE RÉSULTAT CONSOLIDÉ</h1>
-            <h2>""" + self.get_selection_info() + """</h2>
+            {logo_html}
+            <div style="clear: both;"></div>
+            <h1>COMPTE DE RÉSULTAT</h1>
+            <h2>{self.get_selection_info()}</h2>
             <table>
         """
         
@@ -875,7 +1197,31 @@ class CompteResultatDisplay(QDialog):
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
                 value = item.text() if item else ""
-                css_class = "amount" if col > 0 else ""
+                
+                # Déterminer la classe CSS selon le contenu de la première colonne
+                css_class = ""
+                if col == 0:  # Première colonne (libellés)
+                    if "PRODUITS" in value or "CHARGES" in value:
+                        css_class = "header"
+                    elif "TOTAL" in value:
+                        css_class = "total"
+                    elif "RÉSULTAT" in value:
+                        css_class = "result"
+                else:  # Colonnes de données
+                    first_col_item = self.table.item(row, 0)
+                    if first_col_item:
+                        first_col_text = first_col_item.text()
+                        if "PRODUITS" in first_col_text or "CHARGES" in first_col_text:
+                            css_class = "header"
+                        elif "TOTAL" in first_col_text:
+                            css_class = "total"
+                        elif "RÉSULTAT" in first_col_text:
+                            css_class = "result"
+                        else:
+                            css_class = "amount"
+                    else:
+                        css_class = "amount"
+                
                 html += f'<td class="{css_class}">{value}</td>'
             html += "</tr>"
         
@@ -1468,3 +1814,350 @@ def show_compte_resultat(parent, config_data):
     """Fonction pour afficher le compte de résultat"""
     dialog = CompteResultatDisplay(parent, config_data)
     return dialog.exec()
+
+
+class ExportSettingsDialog(QDialog):
+    """Dialogue pour configurer les paramètres d'export PDF et Excel"""
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle("Paramètres d'Export")
+        self.setMinimumSize(500, 600)
+        
+        # Charger les paramètres existants
+        self.settings = self.load_export_settings()
+        
+        self.init_ui()
+        self.load_current_settings()
+        
+    def init_ui(self):
+        """Initialise l'interface utilisateur"""
+        layout = QVBoxLayout()
+        
+        # Titre
+        title = QLabel("Configuration des Exports PDF et Excel")
+        title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #2c3e50; margin-bottom: 10px;")
+        layout.addWidget(title)
+        
+        # Section couleurs
+        colors_group = self.create_colors_section()
+        layout.addWidget(colors_group)
+        
+        # Section logo
+        logo_group = self.create_logo_section()
+        layout.addWidget(logo_group)
+        
+        # Aperçu des couleurs
+        preview_group = self.create_preview_section()
+        layout.addWidget(preview_group)
+        
+        # Boutons
+        buttons_layout = self.create_buttons()
+        layout.addLayout(buttons_layout)
+        
+        self.setLayout(layout)
+    
+    def create_colors_section(self):
+        """Crée la section de configuration des couleurs"""
+        group = QGroupBox("Configuration des Couleurs")
+        layout = QGridLayout()
+        
+        # Couleur du titre du document
+        layout.addWidget(QLabel("Couleur du titre du document:"), 0, 0)
+        self.title_color_btn = QPushButton()
+        self.title_color_btn.setFixedSize(80, 30)
+        self.title_color_btn.clicked.connect(lambda: self.select_color('title'))
+        layout.addWidget(self.title_color_btn, 0, 1)
+        
+        # Couleur des en-têtes
+        layout.addWidget(QLabel("Couleur des en-têtes:"), 1, 0)
+        self.header_color_btn = QPushButton()
+        self.header_color_btn.setFixedSize(80, 30)
+        self.header_color_btn.clicked.connect(lambda: self.select_color('header'))
+        layout.addWidget(self.header_color_btn, 1, 1)
+        
+        # Couleur des totaux
+        layout.addWidget(QLabel("Couleur des totaux:"), 2, 0)
+        self.total_color_btn = QPushButton()
+        self.total_color_btn.setFixedSize(80, 30)
+        self.total_color_btn.clicked.connect(lambda: self.select_color('total'))
+        layout.addWidget(self.total_color_btn, 2, 1)
+        
+        # Couleur du résultat financier
+        layout.addWidget(QLabel("Couleur du résultat financier:"), 3, 0)
+        self.result_color_btn = QPushButton()
+        self.result_color_btn.setFixedSize(80, 30)
+        self.result_color_btn.clicked.connect(lambda: self.select_color('result'))
+        layout.addWidget(self.result_color_btn, 3, 1)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_logo_section(self):
+        """Crée la section de configuration du logo"""
+        group = QGroupBox("Configuration du Logo")
+        layout = QGridLayout()
+        
+        # Chemin du logo
+        layout.addWidget(QLabel("Fichier logo:"), 0, 0)
+        self.logo_path = QLineEdit()
+        self.logo_path.setPlaceholderText("Sélectionnez un fichier image...")
+        layout.addWidget(self.logo_path, 0, 1)
+        
+        browse_btn = QPushButton("Parcourir")
+        browse_btn.clicked.connect(self.browse_logo)
+        layout.addWidget(browse_btn, 0, 2)
+        
+        # Position du logo
+        layout.addWidget(QLabel("Position du logo:"), 1, 0)
+        self.logo_position = QComboBox()
+        self.logo_position.addItems(["Haut gauche", "Haut droite", "Haut centre"])
+        layout.addWidget(self.logo_position, 1, 1)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_preview_section(self):
+        """Crée la section d'aperçu des couleurs"""
+        group = QGroupBox("Aperçu des Couleurs")
+        layout = QVBoxLayout()
+        
+        # Tableau d'aperçu
+        self.preview_table = QTableWidget(6, 2)
+        self.preview_table.setHorizontalHeaderLabels(["Élément", "Valeur"])
+        self.preview_table.setMaximumHeight(200)
+        
+        # Données d'exemple
+        preview_data = [
+            ("COMPTE DE RÉSULTAT", "title"),
+            ("Poste", "header"),
+            ("Recettes", "100 000,00"),
+            ("Subventions", "50 000,00"),
+            ("TOTAL PRODUITS", "total"),
+            ("RÉSULTAT FINANCIER", "result")
+        ]
+        
+        for row, (label, data_type) in enumerate(preview_data):
+            # Colonne label
+            item_label = QTableWidgetItem(label)
+            if data_type == "title":
+                item_label.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+            elif data_type == "header":
+                item_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            elif data_type in ["total", "result"]:
+                item_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+            
+            self.preview_table.setItem(row, 0, item_label)
+            
+            # Colonne valeur
+            if data_type in ["title", "header", "total", "result"]:
+                item_value = QTableWidgetItem("")
+            else:
+                item_value = QTableWidgetItem(data_type)
+                item_value.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            
+            self.preview_table.setItem(row, 1, item_value)
+        
+        self.preview_table.resizeColumnsToContents()
+        layout.addWidget(self.preview_table)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_buttons(self):
+        """Crée les boutons de validation"""
+        layout = QHBoxLayout()
+        
+        # Bouton Réinitialiser
+        reset_btn = QPushButton("Réinitialiser")
+        reset_btn.clicked.connect(self.reset_to_defaults)
+        layout.addWidget(reset_btn)
+        
+        layout.addStretch()
+        
+        # Bouton Annuler
+        cancel_btn = QPushButton("Annuler")
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(cancel_btn)
+        
+        # Bouton Sauvegarder
+        save_btn = QPushButton("Sauvegarder")
+        save_btn.clicked.connect(self.save_settings)
+        save_btn.setStyleSheet("QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 8px; }")
+        layout.addWidget(save_btn)
+        
+        return layout
+    
+    def select_color(self, color_type):
+        """Ouvre le sélecteur de couleur"""
+        current_color = getattr(self.settings, f'{color_type}_color', '#000000')
+        color = QColorDialog.getColor(QColor(current_color), self, f"Choisir la couleur - {color_type}")
+        
+        if color.isValid():
+            setattr(self.settings, f'{color_type}_color', color.name())
+            self.update_color_button(color_type, color.name())
+            self.update_preview()
+    
+    def update_color_button(self, color_type, color_hex):
+        """Met à jour l'apparence du bouton de couleur"""
+        button = getattr(self, f'{color_type}_color_btn')
+        button.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #999999;")
+    
+    def browse_logo(self):
+        """Ouvre le dialogue de sélection de fichier pour le logo"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner un logo",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
+        )
+        
+        if file_path:
+            self.logo_path.setText(file_path)
+            self.settings.logo_path = file_path
+    
+    def update_preview(self):
+        """Met à jour l'aperçu des couleurs"""
+        color_mapping = {
+            0: ('title_color', '#2c3e50'),  # Titre
+            1: ('header_color', '#34495e'),  # En-tête
+            4: ('total_color', '#3498db'),   # Total
+            5: ('result_color', '#2ecc71')   # Résultat
+        }
+        
+        for row, (color_attr, default_color) in color_mapping.items():
+            color_hex = getattr(self.settings, color_attr, default_color)
+            
+            # Mettre à jour la couleur de fond des cellules
+            for col in range(2):
+                item = self.preview_table.item(row, col)
+                if item:
+                    item.setBackground(QColor(color_hex))
+                    item.setForeground(QColor('#ffffff'))
+    
+    def load_current_settings(self):
+        """Charge les paramètres actuels dans l'interface"""
+        # Mettre à jour les boutons de couleur
+        colors = ['title', 'header', 'total', 'result']
+        defaults = ['#2c3e50', '#34495e', '#3498db', '#2ecc71']
+        
+        for color_type, default in zip(colors, defaults):
+            color_hex = getattr(self.settings, f'{color_type}_color', default)
+            self.update_color_button(color_type, color_hex)
+        
+        # Mettre à jour le logo
+        if hasattr(self.settings, 'logo_path') and self.settings.logo_path:
+            self.logo_path.setText(self.settings.logo_path)
+        
+        if hasattr(self.settings, 'logo_position') and self.settings.logo_position:
+            index = self.logo_position.findText(self.settings.logo_position)
+            if index >= 0:
+                self.logo_position.setCurrentIndex(index)
+        
+        # Mettre à jour l'aperçu
+        self.update_preview()
+    
+    def reset_to_defaults(self):
+        """Remet les paramètres par défaut"""
+        self.settings = self.get_default_settings()
+        self.load_current_settings()
+    
+    def save_settings(self):
+        """Sauvegarde les paramètres dans la base de données"""
+        try:
+            # Récupérer les valeurs actuelles
+            self.settings.logo_path = self.logo_path.text()
+            self.settings.logo_position = self.logo_position.currentText()
+            
+            # Sauvegarder dans la base de données
+            self.save_export_settings(self.settings)
+            
+            self.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la sauvegarde: {str(e)}")
+    
+    def load_export_settings(self):
+        """Charge les paramètres d'export depuis la base de données"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            # Créer la table si elle n'existe pas
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS export_settings (
+                    id INTEGER PRIMARY KEY,
+                    title_color TEXT DEFAULT '#2c3e50',
+                    header_color TEXT DEFAULT '#34495e',
+                    total_color TEXT DEFAULT '#3498db',
+                    result_color TEXT DEFAULT '#2ecc71',
+                    logo_path TEXT DEFAULT '',
+                    logo_position TEXT DEFAULT 'Haut gauche'
+                )
+            ''')
+            
+            # Récupérer les paramètres
+            cursor.execute('SELECT * FROM export_settings WHERE id = 1')
+            result = cursor.fetchone()
+            
+            if result:
+                settings = type('Settings', (), {})()
+                settings.title_color = result[1]
+                settings.header_color = result[2]
+                settings.total_color = result[3]
+                settings.result_color = result[4]
+                settings.logo_path = result[5]
+                settings.logo_position = result[6]
+            else:
+                settings = self.get_default_settings()
+            
+            conn.close()
+            return settings
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Avertissement", f"Impossible de charger les paramètres: {str(e)}")
+            return self.get_default_settings()
+    
+    def get_default_settings(self):
+        """Retourne les paramètres par défaut"""
+        settings = type('Settings', (), {})()
+        settings.title_color = '#2c3e50'
+        settings.header_color = '#34495e'
+        settings.total_color = '#3498db'
+        settings.result_color = '#2ecc71'
+        settings.logo_path = ''
+        settings.logo_position = 'Haut gauche'
+        return settings
+    
+    def save_export_settings(self, settings):
+        """Sauvegarde les paramètres dans la base de données"""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # Créer la table si elle n'existe pas
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS export_settings (
+                    id INTEGER PRIMARY KEY,
+                    title_color TEXT DEFAULT '#2c3e50',
+                    header_color TEXT DEFAULT '#34495e',
+                    total_color TEXT DEFAULT '#3498db',
+                    result_color TEXT DEFAULT '#2ecc71',
+                    logo_path TEXT DEFAULT '',
+                    logo_position TEXT DEFAULT 'Haut gauche'
+                )
+            ''')
+            
+            # Insérer ou mettre à jour
+            cursor.execute('''
+                INSERT OR REPLACE INTO export_settings 
+                (id, title_color, header_color, total_color, result_color, logo_path, logo_position)
+                VALUES (1, ?, ?, ?, ?, ?, ?)
+            ''', (settings.title_color, settings.header_color, settings.total_color,
+                  settings.result_color, settings.logo_path, settings.logo_position))
+            
+            conn.commit()
+            
+        finally:
+            conn.close()
