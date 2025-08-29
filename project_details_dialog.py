@@ -77,12 +77,12 @@ class ProjectDetailsDialog(QDialog):
                     couts["complet"] += (cout_complet or 0) * total_jours
                     
         # Affichage des coûts
-        budget_vbox = QVBoxLayout()
-        budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
-        budget_vbox.addWidget(QLabel(f"Coût chargé : {couts['charge']:.2f} €"))
-        budget_vbox.addWidget(QLabel(f"Coût direct : {couts['direct']:.2f} €"))
-        budget_vbox.addWidget(QLabel(f"Coût complet : {couts['complet']:.2f} €"))
-        grid.addLayout(budget_vbox, 0, 2)
+        self.budget_vbox = QVBoxLayout()
+        self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
+        self.budget_vbox.addWidget(QLabel(f"Coût chargé : {couts['charge']:.2f} €"))
+        self.budget_vbox.addWidget(QLabel(f"Coût production : {couts['direct']:.2f} €"))
+        self.budget_vbox.addWidget(QLabel(f"Coût complet : {couts['complet']:.2f} €"))
+        grid.addLayout(self.budget_vbox, 0, 2)
         
         # En haut à gauche
         left_vbox = QVBoxLayout()
@@ -201,11 +201,15 @@ class ProjectDetailsDialog(QDialog):
         main_layout.addStretch()
         self.setLayout(main_layout)
 
+        self.refresh_budget()  # Recalcul initial des coûts
+
     def handle_import_excel(self):
         """Ouvre l'interface d'import Excel configurable avec le projet pré-sélectionné"""
         try:
             from excel_import import open_excel_import_dialog
             open_excel_import_dialog(self, self.projet_id)
+            # Actualiser les coûts et subventions après import Excel
+            self.refresh_budget()
         except ImportError as e:
             QMessageBox.critical(
                 self, "Erreur", 
@@ -304,9 +308,298 @@ class ProjectDetailsDialog(QDialog):
         from budget_edit_dialog import BudgetEditDialog
         dlg = BudgetEditDialog(self.projet_id, self)
         dlg.exec()
+        # Actualiser les coûts et subventions après modification du budget
+        self.refresh_budget()
 
     def open_task_manager(self):
         from task_manager_dialog import TaskManagerDialog
         dlg = TaskManagerDialog(self, self.projet_id)
         dlg.exec()
+        # Actualiser les coûts et subventions après gestion des tâches
+        self.refresh_budget()
+
+    def get_project_data_for_subventions(self):
+        """Récupère les données du projet pour calculer les subventions (similaire à SubventionDialog)"""
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        data = {
+            'temps_travail_total': 0,
+            'depenses_externes': 0,
+            'autres_achats': 0,
+            'amortissements': 0
+        }
+        
+        # 1. Récupérer dates de début et fin du projet
+        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+        date_row = cursor.fetchone()
+        if not date_row or not date_row[0] or not date_row[1]:
+            conn.close()
+            return data
+        
+        import datetime
+        
+        # Convertir les dates MM/yyyy en objets datetime
+        try:
+            debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+        except ValueError:
+            conn.close()
+            return data
+        
+        # 2. Calculer le temps de travail et le montant chargé
+        cursor.execute("""
+            SELECT tt.annee, tt.categorie, tt.mois, tt.jours 
+            FROM temps_travail tt 
+            WHERE tt.projet_id = ?
+        """, (self.projet_id,))
+        
+        temps_travail_rows = cursor.fetchall()
+        cout_total_temps = 0
+        
+        mapping_categories = {
+            "Stagiaire Projet": "STP",
+            "Assistante / opérateur": "AOP", 
+            "Technicien": "TEP",
+            "Junior": "IJP",
+            "Senior": "ISP",
+            "Expert": "EDP",
+            "Collaborateur moyen": "MOY"
+        }
+        
+        for annee, categorie, mois, jours in temps_travail_rows:
+            # Convertir la catégorie du temps de travail au format de categorie_cout
+            categorie_code = mapping_categories.get(categorie, "")
+            
+            if not categorie_code:
+                continue
+                
+            # Récupérer le montant chargé pour cette catégorie et cette année
+            cursor.execute("""
+                SELECT montant_charge 
+                FROM categorie_cout 
+                WHERE categorie = ? AND annee = ?
+            """, (categorie_code, annee))
+            
+            cout_row = cursor.fetchone()
+            if cout_row and cout_row[0]:
+                montant_charge = float(cout_row[0])
+                cout_total_temps += jours * montant_charge
+            else:
+                # Si pas de coût pour cette année/catégorie, utiliser une valeur par défaut
+                cout_total_temps += jours * 500  # 500€ par jour par défaut
+        
+        data['temps_travail_total'] = cout_total_temps
+        
+        # 3. Récupérer toutes les dépenses externes
+        cursor.execute("""
+            SELECT SUM(montant) 
+            FROM depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        depenses_row = cursor.fetchone()
+        if depenses_row and depenses_row[0]:
+            data['depenses_externes'] = float(depenses_row[0])
+        
+        # 4. Récupérer toutes les autres dépenses
+        cursor.execute("""
+            SELECT SUM(montant) 
+            FROM autres_depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        autres_depenses_row = cursor.fetchone()
+        if autres_depenses_row and autres_depenses_row[0]:
+            data['autres_achats'] = float(autres_depenses_row[0])
+        
+        # 5. Calculer les dotations aux amortissements
+        cursor.execute("""
+            SELECT montant, date_achat, duree 
+            FROM investissements 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        amortissements_total = 0
+        
+        for montant, date_achat, duree in cursor.fetchall():
+            try:
+                # Convertir la date d'achat en datetime
+                achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
+                
+                # La dotation commence le mois suivant l'achat
+                debut_amort = achat_date.replace(day=1)
+                debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
+                debut_amort = debut_amort.replace(day=1)
+                
+                # La fin de l'amortissement est soit la fin du projet, soit la fin de la période d'amortissement
+                fin_amort = achat_date.replace(day=1)
+                # Ajouter durée années à la date d'achat
+                fin_amort = datetime.datetime(fin_amort.year + int(duree), fin_amort.month, 1)
+                
+                # Prendre la date la plus proche entre fin du projet et fin d'amortissement
+                fin_effective = min(fin_projet, fin_amort)
+                
+                # Si le début d'amortissement est après la fin du projet, pas d'amortissement
+                if debut_amort > fin_projet:
+                    continue
+                    
+                # Calculer le nombre de mois d'amortissement effectif
+                mois_amort = (fin_effective.year - debut_amort.year) * 12 + fin_effective.month - debut_amort.month + 1
+                
+                # Calculer la dotation mensuelle (montant / durée en mois)
+                dotation_mensuelle = float(montant) / (int(duree) * 12)
+                
+                # Ajouter au total des amortissements
+                amortissements_total += dotation_mensuelle * mois_amort
+            except Exception:
+                # En cas d'erreur dans le calcul, ignorer cet investissement
+                continue
+        
+        data['amortissements'] = amortissements_total
+        
+        conn.close()
+        return data
+
+    def refresh_budget(self):
+        """Recalcule et met à jour les coûts du budget."""
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            # Recalcul des coûts
+            cursor.execute('''
+                SELECT t.categorie, SUM(t.jours) AS total_jours
+                FROM temps_travail t
+                WHERE t.projet_id = ?
+                GROUP BY t.categorie
+            ''', (self.projet_id,))
+            categories_jours = cursor.fetchall()
+
+            mapping_categories = {
+                "Stagiaire Projet": "STP",
+                "Assistante / opérateur": "AOP", 
+                "Technicien": "TEP",
+                "Junior": "IJP",
+                "Senior": "ISP",
+                "Expert": "EDP",
+                "Collaborateur moyen": "MOY"
+            }
+
+            couts = {"charge": 0, "direct": 0, "complet": 0}
+            missing_data = False
+            for categorie, total_jours in categories_jours:
+                code_categorie = mapping_categories.get(categorie, categorie)
+                cursor.execute('''
+                    SELECT montant_charge, cout_production, cout_complet
+                    FROM categorie_cout
+                    WHERE categorie = ?
+                ''', (code_categorie,))
+                res = cursor.fetchone()
+
+                if res:
+                    montant_charge, cout_production, cout_complet = res
+                    couts["charge"] += (montant_charge or 0) * total_jours
+                    couts["direct"] += (cout_production or 0) * total_jours
+                    couts["complet"] += (cout_complet or 0) * total_jours
+                else:
+                    missing_data = True
+
+            # Mise à jour des labels
+            self.budget_vbox.itemAt(1).widget().setText(f"Coût chargé : {couts['charge']:.2f} €")
+            self.budget_vbox.itemAt(2).widget().setText(f"Coût production : {couts['direct']:.2f} €")
+            self.budget_vbox.itemAt(3).widget().setText(f"Coût complet : {couts['complet']:.2f} €")
+
+            if missing_data:
+                self.budget_vbox.addWidget(QLabel("<i>Note : Certaines données sont manquantes pour le calcul.</i>"))
+
+            # Calcul et affichage des subventions
+            self.refresh_subventions()
+
+    def refresh_subventions(self):
+        """Calcule et affiche les montants des subventions"""
+        # Supprimer les anciens labels de subventions (s'ils existent)
+        while self.budget_vbox.count() > 4:  # Garder seulement les 4 premiers items (titre + 3 coûts)
+            item = self.budget_vbox.takeAt(self.budget_vbox.count() - 1)
+            if item.widget():
+                item.widget().deleteLater()
+
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            
+            # Récupérer toutes les subventions pour ce projet
+            try:
+                cursor.execute('''
+                    SELECT nom, depenses_temps_travail, coef_temps_travail, 
+                           depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
+                           depenses_dotation_amortissements, coef_dotation_amortissements, 
+                           cd, taux, montant_subvention_max
+                    FROM subventions 
+                    WHERE projet_id = ?
+                ''', (self.projet_id,))
+                subventions = cursor.fetchall()
+            except sqlite3.OperationalError:
+                # Les colonnes montant_subvention_max n'existent peut-être pas encore
+                try:
+                    cursor.execute('''
+                        SELECT nom, depenses_temps_travail, coef_temps_travail, 
+                               depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
+                               depenses_dotation_amortissements, coef_dotation_amortissements, 
+                               cd, taux
+                        FROM subventions 
+                        WHERE projet_id = ?
+                    ''', (self.projet_id,))
+                    subventions = [list(row) + [0] for row in cursor.fetchall()]  # Ajouter 0 pour montant_max
+                except sqlite3.OperationalError:
+                    subventions = []
+
+            if not subventions:
+                return
+
+            # Récupérer les données du projet
+            projet_data = self.get_project_data_for_subventions()
+
+            # Ajouter un séparateur
+            self.budget_vbox.addWidget(QLabel(""))
+            self.budget_vbox.addWidget(QLabel("<b>Subventions :</b>"))
+
+            total_subventions = 0
+
+            for subv in subventions:
+                if len(subv) >= 12:
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max = subv
+                else:
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux = subv
+                    montant_max = 0
+
+                # Calculer le montant de la subvention
+                montant = 0
+
+                # Temps de travail
+                if depenses_temps:
+                    temps_travail = projet_data['temps_travail_total'] * (cd or 1)
+                    montant += (coef_temps or 0) * temps_travail
+
+                # Dépenses externes
+                if depenses_ext:
+                    montant += (coef_ext or 0) * projet_data['depenses_externes']
+
+                # Autres achats
+                if depenses_autres:
+                    montant += (coef_autres or 0) * projet_data['autres_achats']
+
+                # Dotation amortissements
+                if depenses_amort:
+                    montant += (coef_amort or 0) * projet_data['amortissements']
+
+                # Appliquer le taux de subvention
+                montant = montant * ((taux or 0) / 100)
+
+                # Appliquer le plafond si défini
+                if montant_max and montant_max > 0:
+                    montant = min(montant, montant_max)
+
+                total_subventions += montant
+
+                # Afficher la subvention
+                subv_label = QLabel(f"{nom} : {montant:,.2f} €".replace(",", " "))
+                self.budget_vbox.addWidget(subv_label)
 
