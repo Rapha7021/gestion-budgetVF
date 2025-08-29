@@ -94,6 +94,7 @@ class CategorieCoutDialog(QDialog):
         main_layout.addLayout(btn_layout)
 
         self.table.cellChanged.connect(self.mark_dirty)
+        self.table.cellChanged.connect(self.validate_category_code)
         self.table.installEventFilter(self)
 
         self.setLayout(main_layout)
@@ -141,6 +142,14 @@ class CategorieCoutDialog(QDialog):
             # Vérifier si la catégorie existe déjà
             all_categories = self.get_categories()
             existing_codes = [cat[0] for cat in all_categories]
+            
+            # Aussi vérifier les codes actuellement dans le tableau
+            for i in range(self.table.rowCount()):
+                item = self.table.item(i, 0)
+                if item and item.text().strip().upper() == code:
+                    existing_codes.append(code)
+                    break
+            
             if code in existing_codes:
                 QMessageBox.warning(self, 'Erreur', 'Cette catégorie existe déjà.')
                 return
@@ -213,12 +222,6 @@ class CategorieCoutDialog(QDialog):
         
         code, libelle = categories[current_row]
         
-        # Vérifier si c'est une catégorie prédéfinie
-        predefined_codes = [cat[0] for cat in CATEGORIES]
-        if code in predefined_codes:
-            QMessageBox.warning(self, 'Erreur', 'Impossible de supprimer une catégorie prédéfinie.')
-            return
-        
         # Demander confirmation
         reply = QMessageBox.question(self, 'Confirmation', 
                                    f'Voulez-vous vraiment supprimer la catégorie "{code}" ?\n'
@@ -229,8 +232,13 @@ class CategorieCoutDialog(QDialog):
             # Supprimer de la base de données
             self.delete_category_from_db(code)
             
-            # Supprimer des catégories personnalisées
+            # Supprimer des catégories personnalisées si c'en est une
             self.custom_categories = [(c, l) for c, l in self.custom_categories if c != code]
+            
+            # Si c'est une catégorie prédéfinie, la retirer temporairement de CATEGORIES
+            # (Note: elle réapparaîtra au redémarrage de l'application)
+            global CATEGORIES
+            CATEGORIES = [(c, l) for c, l in CATEGORIES if c != code]
             
             # Sauvegarder les brouillons actuels
             self.brouillons[self.current_year] = self.get_table_values()
@@ -256,6 +264,17 @@ class CategorieCoutDialog(QDialog):
         conn.commit()
         conn.close()
 
+    def update_category_code_in_lists(self, old_code, new_code):
+        """Met à jour le code de catégorie dans les listes internes"""
+        # Mettre à jour dans CATEGORIES si c'est une catégorie prédéfinie
+        global CATEGORIES
+        CATEGORIES = [(new_code if code == old_code else code, libelle) 
+                     for code, libelle in CATEGORIES]
+        
+        # Mettre à jour dans custom_categories si c'est une catégorie personnalisée
+        self.custom_categories = [(new_code if code == old_code else code, libelle) 
+                                 for code, libelle in self.custom_categories]
+
     def change_year(self):
         # Sauvegarde le brouillon courant
         self.brouillons[self.current_year] = self.get_table_values()
@@ -264,47 +283,80 @@ class CategorieCoutDialog(QDialog):
         # Charge le brouillon de l'année sélectionnée ou les valeurs de la base
         self.set_table_values(self.brouillons.get(self.current_year, None))
     def get_table_values(self):
-        # Retourne les valeurs du tableau sous forme de dict {categorie: [montant_charge, cout_production, cout_complet]}
+        # Retourne les valeurs du tableau sous forme de dict {original_code: [current_code, libelle, montant_charge, cout_production, cout_complet]}
         values = {}
         categories = self.get_categories()
-        for i, (code, libelle) in enumerate(categories):
+        for i, (original_code, default_libelle) in enumerate(categories):
             if i < self.table.rowCount():  # S'assurer que la ligne existe
                 row = []
+                # Code de catégorie
+                code_item = self.table.item(i, 0)
+                row.append(code_item.text() if code_item else original_code)
+                # Libellé
+                libelle_item = self.table.item(i, 1)
+                row.append(libelle_item.text() if libelle_item else default_libelle)
+                # Montants
                 for j in range(2, 5):
                     item = self.table.item(i, j)
                     row.append(item.text() if item and item.text() else '')
-                values[code] = row
+                values[original_code] = row
         return values
 
     def set_table_values(self, values):
         self._loading = True
         categories = self.get_categories()
         if values:
-            for i, (code, libelle) in enumerate(categories):
+            for i, (original_code, default_libelle) in enumerate(categories):
                 if i < self.table.rowCount():  # S'assurer que la ligne existe
-                    for j in range(2, 5):
-                        self.table.setItem(i, j, QTableWidgetItem(values.get(code, ['', '', ''])[j-2]))
+                    if original_code in values:
+                        saved_values = values[original_code]
+                        # Code de catégorie (index 0)
+                        self.table.setItem(i, 0, QTableWidgetItem(saved_values[0] if saved_values[0] else original_code))
+                        # Libellé (index 1)
+                        self.table.setItem(i, 1, QTableWidgetItem(saved_values[1] if len(saved_values) > 1 and saved_values[1] else default_libelle))
+                        # Montants (indices 2, 3, 4)
+                        for j in range(2, 5):
+                            self.table.setItem(i, j, QTableWidgetItem(saved_values[j] if len(saved_values) > j else ''))
         else:
             # Si pas de brouillon, charger depuis la base
             year = self.current_year
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            for i, (code, libelle) in enumerate(categories):
+            for i, (code, default_libelle) in enumerate(categories):
                 if i < self.table.rowCount():  # S'assurer que la ligne existe
-                    cursor.execute('''SELECT montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, code))
+                    cursor.execute('''SELECT libelle, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, code))
                     res = cursor.fetchone()
+                    
+                    # Charger le libellé depuis la DB si disponible, sinon utiliser le défaut
+                    libelle_to_use = res[0] if res and res[0] else default_libelle
+                    self.table.setItem(i, 1, QTableWidgetItem(libelle_to_use))
+                    
                     for j in range(2, 5):
                         self.table.setItem(i, j, QTableWidgetItem(''))
                     if res:
-                        self.table.setItem(i, 2, QTableWidgetItem('' if res[0] is None else str(res[0])))
-                        self.table.setItem(i, 3, QTableWidgetItem('' if res[1] is None else str(res[1])))
-                        self.table.setItem(i, 4, QTableWidgetItem('' if res[2] is None else str(res[2])))
+                        self.table.setItem(i, 2, QTableWidgetItem('' if res[1] is None else str(res[1])))
+                        self.table.setItem(i, 3, QTableWidgetItem('' if res[2] is None else str(res[2])))
+                        self.table.setItem(i, 4, QTableWidgetItem('' if res[3] is None else str(res[3])))
             conn.close()
         self._loading = False
 
     def mark_dirty(self, row, column):
-        if not getattr(self, '_loading', False) and column in [2, 3, 4]:
+        if not getattr(self, '_loading', False) and column in [0, 1, 2, 3, 4]:
             self._dirty = True
+    
+    def validate_category_code(self, row, column):
+        """Valide et formate le code de catégorie (colonne 0)"""
+        if column == 0 and not getattr(self, '_loading', False):
+            item = self.table.item(row, column)
+            if item:
+                text = item.text()
+                # Limiter à 3 caractères et convertir en majuscules
+                formatted_text = text.upper()[:3]
+                if text != formatted_text:
+                    # Désactiver temporairement les signaux pour éviter la récursion
+                    self.table.blockSignals(True)
+                    item.setText(formatted_text)
+                    self.table.blockSignals(False)
     def confirm_save(self):
         reply = QMessageBox.question(self, 'Confirmation', 'Voulez-vous enregistrer les modifications ?',
                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -318,12 +370,55 @@ class CategorieCoutDialog(QDialog):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         categories = self.get_categories()
-        for i, (code, libelle) in enumerate(categories):
+        
+        for i, (original_code, original_libelle) in enumerate(categories):
             if i < self.table.rowCount():  # S'assurer que la ligne existe
-                # Récupérer les valeurs existantes
-                cursor.execute('''SELECT id, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, code))
+                # Récupérer les valeurs modifiées depuis le tableau
+                code_item = self.table.item(i, 0)
+                current_code = code_item.text().strip().upper() if code_item else original_code
+                
+                libelle_item = self.table.item(i, 1)
+                current_libelle = libelle_item.text() if libelle_item else original_libelle
+                
+                # Vérifier si le code a changé
+                code_changed = current_code != original_code
+                
+                if code_changed:
+                    # Vérifier que le nouveau code n'existe pas déjà pour cette année
+                    cursor.execute('''SELECT id FROM categorie_cout WHERE annee=? AND categorie=? AND categorie!=?''', 
+                                 (year, current_code, original_code))
+                    if cursor.fetchone():
+                        if show_message:
+                            QMessageBox.warning(self, 'Erreur', f'Le code "{current_code}" existe déjà pour cette année.')
+                        continue
+                    
+                    # Demander si on veut changer le code pour toutes les années
+                    reply = QMessageBox.question(self, 'Changement de code', 
+                                               f'Voulez-vous changer le code "{original_code}" en "{current_code}" pour toutes les années ?\n'
+                                               'Si vous choisissez "Non", seule l\'année courante sera modifiée.',
+                                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # Changer pour toutes les années
+                        cursor.execute('''UPDATE categorie_cout SET categorie=? WHERE categorie=?''', 
+                                     (current_code, original_code))
+                        # Mettre à jour aussi dans les listes de catégories
+                        self.update_category_code_in_lists(original_code, current_code)
+                        # Continuer avec la logique normale pour cette année
+                    # Si Non, on continue avec la logique normale qui ne mettra à jour que cette année
+                
+                # Récupérer les valeurs existantes avec l'ancien code
+                cursor.execute('''SELECT id, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, original_code))
                 res = cursor.fetchone()
                 update_fields = {}
+                
+                # Toujours inclure le libellé
+                update_fields['libelle'] = current_libelle
+                
+                # Si le code a changé, l'inclure aussi
+                if code_changed:
+                    update_fields['categorie'] = current_code
+                
                 # Montant chargé
                 val = self.table.item(i, 2)
                 if val and val.text().strip():
@@ -345,18 +440,19 @@ class CategorieCoutDialog(QDialog):
                         update_fields['cout_complet'] = float(val.text().replace(',', '.'))
                     except Exception:
                         pass
+                        
                 if res:
-                    # Mise à jour partielle : ne modifie que les champs renseignés
+                    # Mise à jour de l'enregistrement existant
                     set_clause = ', '.join([f"{k}=?" for k in update_fields.keys()])
                     if set_clause:
                         sql = f"UPDATE categorie_cout SET {set_clause} WHERE id=?"
                         cursor.execute(sql, list(update_fields.values()) + [res[0]])
                 elif update_fields:
-                    # Insertion uniquement si au moins un champ est renseigné
+                    # Insertion d'un nouvel enregistrement
                     fields = ', '.join(update_fields.keys())
                     placeholders = ', '.join(['?'] * len(update_fields))
-                    sql = f"INSERT INTO categorie_cout (annee, categorie, libelle, {fields}) VALUES (?, ?, ?, {placeholders})"
-                    cursor.execute(sql, [year, code, libelle] + list(update_fields.values()))
+                    sql = f"INSERT INTO categorie_cout (annee, {fields}) VALUES (?, {placeholders})"
+                    cursor.execute(sql, [year] + list(update_fields.values()))
         conn.commit()
         conn.close()
         if show_message:
