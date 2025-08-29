@@ -595,37 +595,61 @@ class ProjectForm(QDialog):
         cursor.execute('SELECT nom FROM directions ORDER BY nom')
         self.directions = [nom for (nom,) in cursor.fetchall()]
         conn.close()
-        self.direction_combo.addItems(self.directions)
-        equipe_vbox.addWidget(QLabel('Direction :'))
-        equipe_vbox.addWidget(self.direction_combo)
+        
+        # Vérifier s'il y a des directions
+        if not self.directions:
+            # Afficher un message informatif si aucune direction n'existe
+            no_direction_label = QLabel("⚠️ Aucune direction créée.\nVeuillez d'abord créer des directions via le menu principal.")
+            no_direction_label.setStyleSheet("color: orange; font-weight: bold; padding: 10px;")
+            no_direction_label.setWordWrap(True)
+            equipe_vbox.addWidget(no_direction_label)
+            self.equipe_form_disabled = True
+        else:
+            self.direction_combo.addItems(self.directions)
+            equipe_vbox.addWidget(QLabel('Direction :'))
+            equipe_vbox.addWidget(self.direction_combo)
+            self.equipe_form_disabled = False
         self.equipe_types_labels = get_equipe_categories()
         # Filtrer les labels vides par sécurité
         self.equipe_types_labels = [label for label in self.equipe_types_labels if label and label.strip()]
         self.equipe_spins = {}
         self.equipe_form = QFormLayout()
-        for label in self.equipe_types_labels:
-            spin = QSpinBox()
-            spin.setRange(0, 99)
-            self.equipe_spins[label] = spin
-            self.equipe_form.addRow(label, spin)
+        
+        # Créer les spinboxes seulement si des directions existent
+        if not self.equipe_form_disabled:
+            for label in self.equipe_types_labels:
+                spin = QSpinBox()
+                spin.setRange(0, 99)
+                self.equipe_spins[label] = spin
+                self.equipe_form.addRow(label, spin)
+        else:
+            # Ajouter un message dans le formulaire si pas de directions
+            self.equipe_form.addRow(QLabel("Créez d'abord des directions pour configurer l'équipe."))
+        
         equipe_vbox.addLayout(self.equipe_form)
         equipe_group.setLayout(equipe_vbox)
         grid.addWidget(equipe_group, row, 2, 3, 2)  # Côté droit, sur 3 rangées
         row += 3
         row += 1
             # --- Ajout : gestion des effectifs par direction ---
-        self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
-        self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
-        
-        # Connexion des spins avec une fonction spécifique pour chaque label
-        def make_callback(label_name):
-            return lambda value: self.on_equipe_spin_changed(label_name, value)
+        # Initialiser equipe_data seulement si des directions existent
+        if not self.equipe_form_disabled:
+            self.equipe_data = {dir_: {label: 0 for label in self.equipe_types_labels} for dir_ in self.directions}
+            self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
             
-        for label, spin in self.equipe_spins.items():
-            callback = make_callback(label)
-            spin.valueChanged.connect(callback)
-            
-        self._current_direction = self.direction_combo.currentText()  # <-- Ajout ici
+            # Connexion des spins avec une fonction spécifique pour chaque label
+            def make_callback(label_name):
+                return lambda value: self.on_equipe_spin_changed(label_name, value)
+                
+            for label, spin in self.equipe_spins.items():
+                callback = make_callback(label)
+                spin.valueChanged.connect(callback)
+                
+            self._current_direction = self.direction_combo.currentText()  # <-- Ajout ici
+        else:
+            # Initialiser avec des données vides si pas de directions
+            self.equipe_data = {}
+            self._current_direction = None
         # Pas besoin d'appeler on_direction_changed explicitement ici
         
         # Initialisation des données de subventions
@@ -750,6 +774,10 @@ class ProjectForm(QDialog):
                     self.equipe_spins[label].setValue(value)
 
     def on_direction_changed(self, direction):
+        # Vérifier que les directions existent avant de continuer
+        if self.equipe_form_disabled or not direction:
+            return
+            
         # Sauvegarde les valeurs courantes dans la direction précédente
         if hasattr(self, '_current_direction') and self._current_direction is not None:
             # Sauvegarde directement toutes les valeurs actuelles
@@ -766,8 +794,12 @@ class ProjectForm(QDialog):
         self._current_direction = direction
 
     def on_equipe_spin_changed(self, label, value):
+        # Vérifier que les directions existent et que la direction courante est valide
+        if self.equipe_form_disabled or not hasattr(self, '_current_direction') or self._current_direction is None or self._current_direction == '':
+            return
+            
         # Met à jour le dictionnaire pour la direction courante et le label modifié
-        if hasattr(self, '_current_direction') and self._current_direction is not None:
+        if self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
             # Débogage pour vérifier les valeurs
             self.equipe_data[self._current_direction][label] = value
 
@@ -1126,7 +1158,8 @@ class ProjectForm(QDialog):
 
     def save_project(self):
         # Sauvegarder les valeurs de la direction courante avant la sauvegarde
-        if hasattr(self, '_current_direction') and self._current_direction is not None:
+        if (not getattr(self, 'equipe_form_disabled', False) and 
+            hasattr(self, '_current_direction') and self._current_direction is not None and self._current_direction != ''):
             for label in self.equipe_types_labels:
                 # Vérifier que le label n'est pas vide et existe dans les dictionnaires
                 if label and label in self.equipe_spins and self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
