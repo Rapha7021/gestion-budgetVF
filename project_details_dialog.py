@@ -91,7 +91,13 @@ class ProjectDetailsDialog(QDialog):
         h_nom = QHBoxLayout()
         h_nom.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
         left_vbox.addLayout(h_nom)
-        left_vbox.addWidget(QLabel(f"<b>Détails :</b> {projet[2]}"))
+        
+        # Champ détails avec retour à la ligne automatique
+        details_label = QLabel(f"<b>Détails :</b> {projet[2]}")
+        details_label.setWordWrap(True)  # Permet le retour à la ligne automatique
+        details_label.setMaximumWidth(400)  # Limite la largeur pour forcer les retours à la ligne
+        left_vbox.addWidget(details_label)
+        
         grid.addLayout(left_vbox, 0, 0)
         # En haut à droite
         right_vbox = QVBoxLayout()
