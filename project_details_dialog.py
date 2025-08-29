@@ -461,6 +461,70 @@ class ProjectDetailsDialog(QDialog):
         conn.close()
         return data
 
+    def has_cir_activated(self):
+        """Vérifie si le projet a le CIR activé"""
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('SELECT cir FROM projets WHERE id = ?', (self.projet_id,))
+                result = cursor.fetchone()
+                return result and result[0] == 1
+            except sqlite3.OperationalError:
+                return False
+
+    def refresh_cir(self, total_subventions):
+        """Calcule et affiche le montant du CIR"""
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            
+            # Récupérer les coefficients CIR pour les années du projet
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+            date_row = cursor.fetchone()
+            
+            if not date_row or not date_row[0] or not date_row[1]:
+                return
+            
+            try:
+                import datetime
+                debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+            except ValueError:
+                return
+
+            # Récupérer les coefficients CIR (utiliser la première année disponible)
+            k1, k2, k3 = None, None, None
+            for year in range(debut_projet.year, fin_projet.year + 1):
+                cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (year,))
+                cir_coeffs = cursor.fetchone()
+                if cir_coeffs and all(coeff is not None for coeff in cir_coeffs):
+                    k1, k2, k3 = cir_coeffs
+                    break
+
+            if not all(coeff is not None for coeff in [k1, k2, k3]):
+                # Pas de coefficients CIR trouvés
+                return
+
+            # Récupérer les données du projet
+            projet_data = self.get_project_data_for_subventions()
+
+            # Calculer le montant éligible
+            temps_travail_eligible = projet_data['temps_travail_total'] * k1
+            amortissements_eligible = projet_data['amortissements'] * k2
+            montant_eligible = temps_travail_eligible + amortissements_eligible
+
+            # Soustraire les subventions
+            montant_net_eligible = montant_eligible - total_subventions
+
+            # Calculer l'assiette éligible CIR (avant × K3)
+            if montant_net_eligible > 0:
+                # Afficher l'assiette éligible avec le taux K3
+                taux_k3_percent = k3 * 100  # Convertir en pourcentage
+                
+                # Ajouter un séparateur et afficher l'assiette éligible CIR
+                self.budget_vbox.addWidget(QLabel(""))
+                cir_label = QLabel(f"<b>CIR ({taux_k3_percent:.0f}%) : {montant_net_eligible:,.2f} €</b>".replace(",", " "))
+                self.budget_vbox.addWidget(cir_label)
+
     def refresh_budget(self):
         """Recalcule et met à jour les coûts du budget."""
         with sqlite3.connect(DB_PATH) as conn:
@@ -531,13 +595,13 @@ class ProjectDetailsDialog(QDialog):
                     SELECT nom, depenses_temps_travail, coef_temps_travail, 
                            depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
                            depenses_dotation_amortissements, coef_dotation_amortissements, 
-                           cd, taux, montant_subvention_max
+                           cd, taux, montant_subvention_max, depenses_eligibles_max
                     FROM subventions 
                     WHERE projet_id = ?
                 ''', (self.projet_id,))
                 subventions = cursor.fetchall()
             except sqlite3.OperationalError:
-                # Les colonnes montant_subvention_max n'existent peut-être pas encore
+                # Les colonnes montant_subvention_max et depenses_eligibles_max n'existent peut-être pas encore
                 try:
                     cursor.execute('''
                         SELECT nom, depenses_temps_travail, coef_temps_travail, 
@@ -547,7 +611,7 @@ class ProjectDetailsDialog(QDialog):
                         FROM subventions 
                         WHERE projet_id = ?
                     ''', (self.projet_id,))
-                    subventions = [list(row) + [0] for row in cursor.fetchall()]  # Ajouter 0 pour montant_max
+                    subventions = [list(row) + [0, 0] for row in cursor.fetchall()]  # Ajouter 0 pour montant_max et depenses_max
                 except sqlite3.OperationalError:
                     subventions = []
 
@@ -564,42 +628,51 @@ class ProjectDetailsDialog(QDialog):
             total_subventions = 0
 
             for subv in subventions:
-                if len(subv) >= 12:
-                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max = subv
+                if len(subv) >= 13:
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max, depenses_max = subv
                 else:
-                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux = subv
-                    montant_max = 0
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux = subv[:11]
+                    montant_max = subv[11] if len(subv) > 11 else 0
+                    depenses_max = subv[12] if len(subv) > 12 else 0
 
-                # Calculer le montant de la subvention
-                montant = 0
+                # Calculer l'assiette éligible (avant application du taux)
+                assiette_eligible = 0
 
                 # Temps de travail
                 if depenses_temps:
                     temps_travail = projet_data['temps_travail_total'] * (cd or 1)
-                    montant += (coef_temps or 0) * temps_travail
+                    assiette_eligible += (coef_temps or 0) * temps_travail
 
                 # Dépenses externes
                 if depenses_ext:
-                    montant += (coef_ext or 0) * projet_data['depenses_externes']
+                    assiette_eligible += (coef_ext or 0) * projet_data['depenses_externes']
 
                 # Autres achats
                 if depenses_autres:
-                    montant += (coef_autres or 0) * projet_data['autres_achats']
+                    assiette_eligible += (coef_autres or 0) * projet_data['autres_achats']
 
                 # Dotation amortissements
                 if depenses_amort:
-                    montant += (coef_amort or 0) * projet_data['amortissements']
+                    assiette_eligible += (coef_amort or 0) * projet_data['amortissements']
 
-                # Appliquer le taux de subvention
-                montant = montant * ((taux or 0) / 100)
+                # Appliquer le plafond sur l'assiette éligible
+                if depenses_max and depenses_max > 0:
+                    assiette_eligible = min(assiette_eligible, depenses_max)
 
-                # Appliquer le plafond si défini
+                # Calculer le montant de la subvention (pour le total)
+                montant = assiette_eligible * ((taux or 0) / 100)
+
+                # Appliquer le plafond sur le montant final si défini
                 if montant_max and montant_max > 0:
                     montant = min(montant, montant_max)
 
                 total_subventions += montant
 
-                # Afficher la subvention
-                subv_label = QLabel(f"{nom} : {montant:,.2f} €".replace(",", " "))
+                # Afficher l'assiette éligible (plafonnée) avec le taux
+                subv_label = QLabel(f"{nom} ({taux:.0f}%) : {assiette_eligible:,.2f} €".replace(",", " "))
                 self.budget_vbox.addWidget(subv_label)
+
+            # Calculer et afficher le CIR si le projet l'a activé
+            if self.has_cir_activated():
+                self.refresh_cir(total_subventions)
 
