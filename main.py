@@ -263,6 +263,7 @@ class MainWindow(QWidget):
         self.btn_cir = QPushButton('CIR')
         self.btn_directions = QPushButton('Gérer les directions')
         self.btn_project_managers = QPushButton('Gérer les chefs de projet')
+        self.btn_import_export = QPushButton('Importer / Exporter BDD')
         self.btn_couts_categorie.setToolTip(
             "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
         )
@@ -274,6 +275,7 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_cir, alignment=Qt.AlignmentFlag.AlignRight)
         btn_layout.addWidget(self.btn_directions)
         btn_layout.addWidget(self.btn_project_managers)
+        btn_layout.addWidget(self.btn_import_export)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.btn_new.clicked.connect(self.open_project_form)
@@ -286,6 +288,7 @@ class MainWindow(QWidget):
         self.btn_print_budget.clicked.connect(self.handle_print_budget)
         self.btn_directions.clicked.connect(self.open_direction_manager)
         self.btn_project_managers.clicked.connect(self.open_project_manager_dialog)
+        self.btn_import_export.clicked.connect(self.open_import_export_dialog)
 
     def open_categorie_cout_dialog(self):
         from categorie_cout_dialog import CategorieCoutDialog
@@ -353,6 +356,11 @@ class MainWindow(QWidget):
         # Correction : import ici
         from project_details_dialog import ProjectDetailsDialog
         dialog = ProjectDetailsDialog(self, projet_id)
+        dialog.exec()
+
+    def open_import_export_dialog(self):
+        from import_export_dialog import ImportExportDialog
+        dialog = ImportExportDialog(self)
         dialog.exec()
 
 class ProjectForm(QDialog):
