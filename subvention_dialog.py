@@ -410,16 +410,21 @@ class SubventionDialog(QDialog):
         
     def update_assiette(self):
         """Met à jour l'assiette éligible sans multiplier par le taux de subvention."""
+        # Récupérer les données du projet une seule fois pour optimiser
+        projet_data = self.get_project_data()
+        
         assiette = 0
         if self.cb_temps.isChecked():
-            assiette += self.spin_temps.value() * self.get_project_data()['temps_travail_total']
+            # Appliquer le coefficient de charge au temps de travail, comme dans update_montant()
+            temps_travail_avec_cd = projet_data['temps_travail_total'] * self.cd_spin.value()
+            assiette += self.spin_temps.value() * temps_travail_avec_cd
         if self.cb_externes.isChecked():
-            assiette += self.spin_externes.value() * self.get_project_data()['depenses_externes']
+            assiette += self.spin_externes.value() * projet_data['depenses_externes']
         if self.cb_autres.isChecked():
-            assiette += self.spin_autres.value() * self.get_project_data()['autres_achats']
+            assiette += self.spin_autres.value() * projet_data['autres_achats']
         if self.cb_dotation.isChecked():
-            assiette += self.spin_dotation.value() * self.get_project_data()['amortissements']
-        self.assiette_label.setText(f"{assiette:,.2f} €")
+            assiette += self.spin_dotation.value() * projet_data['amortissements']
+        self.assiette_label.setText(f"{assiette:,.2f} €".replace(",", " ").replace(".", ","))
         
     def validate_and_accept(self):
         # Vérifier que le nom est renseigné
