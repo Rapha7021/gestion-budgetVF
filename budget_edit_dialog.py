@@ -182,23 +182,24 @@ class BudgetEditDialog(QDialog):
                 annee INTEGER,
                 direction TEXT,
                 categorie TEXT,
+                membre_id TEXT,
                 mois TEXT,
                 jours REAL,
-                PRIMARY KEY (projet_id, annee, direction, categorie, mois)
+                PRIMARY KEY (projet_id, annee, membre_id, mois)
             )
         """)
         conn.commit()
         conn.close()
 
         # --- Stockage des valeurs par année ---
-        self.budget_data = {}  # {annee: {(direction, categorie, mois): jours}}
-        self.recettes_data = {}  # {annee: {mois: (montant, detail)}}
+        self.budget_data = {}  # {annee: {(row_index, mois): {'jours': X, 'direction': Y, 'categorie': Z, 'membre_id': W}}}
+        self.recettes_data = {}  # {annee: {(ligne_index, mois): (montant, detail)}}
         self.depenses_data = {}  # {annee: {(categorie, mois): (montant, detail)}}
         self.autres_depenses_data = {}  # {annee: {(ligne_index, mois): (montant, detail)}}
-        self.modified = False  # Pour savoir si des modifs non enregistrées existent
-        self.recettes_modified = False
-        self.depenses_modified = False
-        self.autres_depenses_modified = False
+        self.modified_years = set()  # Années modifiées pour le temps de travail
+        self.recettes_modified_years = set()  # Années modifiées pour les recettes
+        self.depenses_modified_years = set()  # Années modifiées pour les dépenses
+        self.autres_depenses_modified_years = set()  # Années modifiées pour les autres dépenses
         self.depenses_categories = [
             "Salaires",
             "Achats",
@@ -292,11 +293,13 @@ class BudgetEditDialog(QDialog):
         # --- Grouper les membres par direction ---
         directions = {}
         membre_idx = 1
+        self.membre_mapping = {}  # Mappage row_index -> identifiant unique
         for type_, direction, nombre in equipe_rows:
             if direction not in directions:
                 directions[direction] = []
-            for _ in range(int(nombre)):
-                directions[direction].append((f"Membre {membre_idx}", type_))
+            for i in range(int(nombre)):
+                membre_id = f"{direction}_{type_}_{i}"  # Identifiant unique
+                directions[direction].append((f"Membre {membre_idx}", type_, membre_id))
                 membre_idx += 1
 
         # --- Récupération des investissements du projet ---
@@ -379,10 +382,12 @@ class BudgetEditDialog(QDialog):
                     table.setItem(row_idx, col, empty)
                 self.direction_rows.add(row_idx)
                 row_idx += 1
-                for _, categorie in membres:
+                for _, categorie, membre_id in membres:
                     item_cat = QTableWidgetItem(categorie)
                     item_cat.setFlags(item_cat.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     table.setItem(row_idx, 0, item_cat)
+                    # Stocke le mapping row -> membre_id
+                    self.membre_mapping[row_idx] = membre_id
                     # Colonnes mois éditables
                     for col in range(1, len(colonnes)):
                         item_mois = QTableWidgetItem("")
@@ -414,7 +419,14 @@ class BudgetEditDialog(QDialog):
             def on_item_changed(item):
                 if item.row() in self.direction_rows:
                     return
-                self.modified = True
+                col = item.column()
+                if col > 0:
+                    value = item.text()
+                    state = double_validator.validate(value, 0)[0]
+                    if state != QDoubleValidator.State.Acceptable and value != "":
+                        item.setText("")
+                        return
+                self.modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
             self.temps_layout.addWidget(table)
@@ -503,7 +515,7 @@ class BudgetEditDialog(QDialog):
                     if state != QDoubleValidator.State.Acceptable and value != "":
                         item.setText("")
                         return
-                self.recettes_modified = True
+                self.recettes_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
             self.recettes_layout.addWidget(table)
@@ -543,6 +555,8 @@ class BudgetEditDialog(QDialog):
                     col_index += 2
             
             self.recettes_data[year] = data
+            if data:
+                self.recettes_modified_years.add(year)
 
         def load_recettes_data_from_db_for_year(self, year, table, colonnes):
             """Charge les données des recettes depuis la base pour une année spécifique et les met dans le tableau"""
@@ -655,7 +669,7 @@ class BudgetEditDialog(QDialog):
                     if state != QDoubleValidator.State.Acceptable and value != "":
                         item.setText("")
                         return
-                self.depenses_modified = True
+                self.depenses_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
             self.depenses_layout.addWidget(table)
@@ -695,6 +709,8 @@ class BudgetEditDialog(QDialog):
                             data[key] = (montant_val, detail)
                     col_index += 2
             self.depenses_data[year] = data
+            if data:
+                self.depenses_modified_years.add(year)
 
         def load_depenses_data_from_db_for_year(self, year, table, colonnes, categories):
             conn = sqlite3.connect('gestion_budget.db')
@@ -784,9 +800,6 @@ class BudgetEditDialog(QDialog):
             self.load_autres_depenses_data_from_db_for_year(year, table, colonnes)
 
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
-                # Si des modifications non enregistrées existent, restaure la mémoire
-            if self.autres_depenses_modified:
-                self.restore_autres_depenses_table_from_memory(year, table, colonnes)
             double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
                 col = item.column()
@@ -796,7 +809,7 @@ class BudgetEditDialog(QDialog):
                     if state != QDoubleValidator.State.Acceptable and value != "":
                         item.setText("")
                         return
-                self.autres_depenses_modified = True
+                self.autres_depenses_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
             self.autres_depenses_layout.addWidget(table)
@@ -831,6 +844,8 @@ class BudgetEditDialog(QDialog):
                             data[key] = (montant_val, detail)
                     col_index += 2
             self.autres_depenses_data[year] = data
+            if data:
+                self.autres_depenses_modified_years.add(year)
 
         def load_autres_depenses_data_from_db_for_year(self, year, table, colonnes):
             conn = sqlite3.connect('gestion_budget.db')
@@ -913,67 +928,83 @@ class BudgetEditDialog(QDialog):
         main_layout.addWidget(btn_save_all)
 
         def save_all_to_db():
-            # Sauvegarde les données de toutes les pages
+            # Sauvegarde d'abord les données de l'année actuellement affichée
             if hasattr(self, 'current_year'):
                 self.save_table_to_memory(self.current_year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_year)))
-                
-                # Pour le temps de travail, il faut récupérer direction et catégorie depuis le tableau
-                for key, jours in self.budget_data.get(self.current_year, {}).items():
-                    row_index, mois = key
-                    # Récupère direction et catégorie depuis le tableau
-                    current_direction = None
-                    for r in range(row_index + 1):
-                        if r in self.direction_rows:
-                            current_direction = self.table_budget.item(r, 0).text()
-                    categorie = self.table_budget.item(row_index, 0).text()
-                    
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO temps_travail (projet_id, annee, direction, categorie, mois, jours)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (self.projet_id, int(self.current_year), current_direction, categorie, mois, jours))
-                conn.commit()
-                conn.close()
-                self.modified = False
-
             if hasattr(self, 'current_recettes_year'):
                 self.save_recettes_table_to_memory(self.current_recettes_year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_recettes_year)))
-                for key, (montant, detail) in self.recettes_data.get(self.current_recettes_year, {}).items():
-                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                        ligne_index, mois = key
-                        cursor.execute("INSERT INTO recettes (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_recettes_year), ligne_index, mois, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.recettes_modified = False
-
             if hasattr(self, 'current_depenses_year'):
                 self.save_depenses_table_to_memory(self.current_depenses_year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_depenses_year)))
-                for key, (montant, detail) in self.depenses_data.get(self.current_depenses_year, {}).items():
-                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                        cursor.execute("INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_depenses_year), *key, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.depenses_modified = False
-
             if hasattr(self, 'current_autres_depenses_year'):
                 self.save_autres_depenses_table_to_memory(self.current_autres_depenses_year)
-                conn = sqlite3.connect('gestion_budget.db')
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(self.current_autres_depenses_year)))
-                for key, (montant, detail) in self.autres_depenses_data.get(self.current_autres_depenses_year, {}).items():
-                    if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                        cursor.execute("INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", (self.projet_id, int(self.current_autres_depenses_year), *key, montant or 0, detail or ""))
-                conn.commit()
-                conn.close()
-                self.autres_depenses_modified = False
+
+            conn = sqlite3.connect('gestion_budget.db')
+            cursor = conn.cursor()
+
+            # Sauvegarde seulement les années modifiées pour le temps de travail
+            for annee in self.modified_years:
+                data = self.budget_data.get(annee, {})
+                if data:  # Seulement si il y a des données
+                    cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                    
+                    for key, val_data in data.items():
+                        row_index, mois = key
+                        if isinstance(val_data, dict):
+                            jours = val_data['jours']
+                            direction = val_data['direction']
+                            categorie = val_data['categorie']
+                            membre_id = val_data.get('membre_id', f"membre_{row_index}")
+                        else:
+                            # Rétrocompatibilité si anciennes données
+                            jours = val_data
+                            direction = "Direction 1"
+                            categorie = "Membre 1"
+                            membre_id = f"membre_{row_index}"
+                        
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO temps_travail (projet_id, annee, direction, categorie, membre_id, mois, jours)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (self.projet_id, int(annee), direction, categorie, membre_id, mois, jours))
+
+            # Sauvegarde seulement les années modifiées pour les recettes
+            for annee in self.recettes_modified_years:
+                data = self.recettes_data.get(annee, {})
+                if data:  # Seulement si il y a des données
+                    cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                    for key, (montant, detail) in data.items():
+                        if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                            ligne_index, mois = key
+                            cursor.execute("INSERT INTO recettes (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
+                                         (self.projet_id, int(annee), ligne_index, mois, montant or 0, detail or ""))
+
+            # Sauvegarde seulement les années modifiées pour les dépenses
+            for annee in self.depenses_modified_years:
+                data = self.depenses_data.get(annee, {})
+                if data:  # Seulement si il y a des données
+                    cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                    for key, (montant, detail) in data.items():
+                        if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                            cursor.execute("INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
+                                         (self.projet_id, int(annee), *key, montant or 0, detail or ""))
+
+            # Sauvegarde seulement les années modifiées pour les autres dépenses
+            for annee in self.autres_depenses_modified_years:
+                data = self.autres_depenses_data.get(annee, {})
+                if data:  # Seulement si il y a des données
+                    cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                    for key, (montant, detail) in data.items():
+                        if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                            cursor.execute("INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
+                                         (self.projet_id, int(annee), *key, montant or 0, detail or ""))
+
+            conn.commit()
+            conn.close()
+            
+            # Réinitialise tous les flags de modification
+            self.modified_years.clear()
+            self.recettes_modified_years.clear()
+            self.depenses_modified_years.clear()
+            self.autres_depenses_modified_years.clear()
 
             QMessageBox.information(self, "Enregistrement", "Toutes les données ont été enregistrées.")
 
@@ -981,7 +1012,8 @@ class BudgetEditDialog(QDialog):
 
         # --- Gestion fermeture : avertir si non enregistré ---
         def closeEvent(event):
-            if self.modified or self.recettes_modified or self.depenses_modified or self.autres_depenses_modified:
+            if (self.modified_years or self.recettes_modified_years or 
+                self.depenses_modified_years or self.autres_depenses_modified_years):
                 reply = QMessageBox.question(
                     self,
                     "Modifications non enregistrées",
@@ -1008,6 +1040,15 @@ class BudgetEditDialog(QDialog):
             if row in self.direction_rows:
                 continue
             
+            # Trouve la direction pour cette ligne
+            current_direction = None
+            for r in range(row + 1):
+                if r in self.direction_rows:
+                    current_direction = table.item(r, 0).text()
+            
+            categorie = table.item(row, 0).text()
+            membre_id = self.membre_mapping.get(row, f"membre_{row}")  # Identifiant unique
+            
             for col in range(1, table.columnCount()):
                 mois = colonnes[col]
                 item = table.item(row, col)
@@ -1016,12 +1057,19 @@ class BudgetEditDialog(QDialog):
                     jours_val = float(jours) if jours else 0
                 except Exception:
                     jours_val = 0
-                # Sauvegarde par clé unique avec l'index de ligne
+                # Sauvegarde avec row_index comme clé principale mais stocke aussi toutes les infos
                 key = (row, mois)
                 if jours_val != 0:  # On ne sauvegarde que les valeurs non nulles
-                    data[key] = jours_val
+                    data[key] = {
+                        'jours': jours_val,
+                        'direction': current_direction,
+                        'categorie': categorie,
+                        'membre_id': membre_id
+                    }
         
         self.budget_data[year] = data
+        if data:  # Marque l'année comme modifiée seulement si il y a des données
+            self.modified_years.add(year)
 
 
     def restore_table_from_memory(self, year, table, colonnes, directions):
@@ -1037,7 +1085,8 @@ class BudgetEditDialog(QDialog):
                 mois = colonnes[col]
                 # Utilise la clé avec l'index de ligne
                 key = (row, mois)
-                val = data.get(key, 0)
+                val_data = data.get(key, {})
+                val = val_data.get('jours', 0) if isinstance(val_data, dict) else 0
                 
                 item = table.item(row, col)
                 if item:
@@ -1067,7 +1116,7 @@ class BudgetEditDialog(QDialog):
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT direction, categorie, mois, jours 
+            SELECT direction, categorie, membre_id, mois, jours 
             FROM temps_travail 
             WHERE projet_id=? AND annee=?
         """, (self.projet_id, int(year)))
@@ -1077,27 +1126,36 @@ class BudgetEditDialog(QDialog):
         if not rows:
             return
 
+        # Met aussi les données en mémoire pour cet année
+        data = {}
+
         # Trouve la ligne correspondante pour chaque donnée
-        for direction, categorie, mois, jours in rows:
-            for row in range(table.rowCount()):
-                if row in self.direction_rows:
-                    continue
-                
-                # Trouve la direction pour cette ligne
-                current_direction = None
-                for r in range(row + 1):
-                    if r in self.direction_rows:
-                        current_direction = table.item(r, 0).text()
-                
-                # Vérifie si c'est la bonne ligne
-                if (current_direction == direction and 
-                    table.item(row, 0).text() == categorie):
-                    
-                    # Trouve la colonne du mois
-                    for col in range(1, table.columnCount()):
-                        if colonnes[col] == mois:
-                            table.blockSignals(True)
-                            table.item(row, col).setText(str(jours))
-                            table.blockSignals(False)
-                            break
+        for direction, categorie, membre_id, mois, jours in rows:
+            # Cherche la ligne correspondante par membre_id
+            target_row = None
+            for row, stored_membre_id in self.membre_mapping.items():
+                if stored_membre_id == membre_id:
+                    target_row = row
                     break
+            
+            if target_row is not None and target_row not in self.direction_rows:
+                # Trouve la colonne du mois
+                for col in range(1, table.columnCount()):
+                    if colonnes[col] == mois:
+                        table.blockSignals(True)
+                        table.item(target_row, col).setText(str(jours))
+                        table.blockSignals(False)
+                        
+                        # Stocke aussi en mémoire
+                        key = (target_row, mois)
+                        data[key] = {
+                            'jours': jours,
+                            'direction': direction,
+                            'categorie': categorie,
+                            'membre_id': membre_id
+                        }
+                        break
+        
+        # Sauvegarde les données en mémoire
+        if data:
+            self.budget_data[year] = data

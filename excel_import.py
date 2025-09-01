@@ -303,9 +303,10 @@ class TempsTravailvailMapper:
                     annee INTEGER,
                     direction TEXT,
                     categorie TEXT,
+                    membre_id TEXT,
                     mois TEXT,
                     jours REAL,
-                    PRIMARY KEY (projet_id, annee, direction, categorie, mois)
+                    PRIMARY KEY (projet_id, annee, membre_id, mois)
                 )
             """)
             
@@ -313,15 +314,19 @@ class TempsTravailvailMapper:
             inserted_count = 0
             for entry in data:
                 try:
+                    # Générer un membre_id unique basé sur direction, catégorie et un index
+                    membre_id = f"{entry['direction']}_{entry['categorie']}_0"
+                    
                     cursor.execute("""
                         INSERT OR REPLACE INTO temps_travail 
-                        (projet_id, annee, direction, categorie, mois, jours)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (projet_id, annee, direction, categorie, membre_id, mois, jours)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         entry['projet_id'],
                         entry['annee'],
                         entry['direction'],
                         entry['categorie'],
+                        membre_id,
                         entry['mois'],
                         entry['jours']
                     ))

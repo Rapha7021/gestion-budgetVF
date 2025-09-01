@@ -157,9 +157,10 @@ def init_db():
         annee INTEGER,
         direction TEXT,
         categorie TEXT,
+        membre_id TEXT,
         mois TEXT,
         jours REAL,
-        PRIMARY KEY (projet_id, annee, direction, categorie, mois),
+        PRIMARY KEY (projet_id, annee, membre_id, mois),
         FOREIGN KEY(projet_id) REFERENCES projets(id)
     )''')
     
