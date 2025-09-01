@@ -97,6 +97,27 @@ class CompteResultatDisplay(QDialog):
         finally:
             conn.close()
     
+    def format_currency(self, value, with_decimals=True):
+        """Formate une valeur monétaire avec le formatage français :
+        - Séparateur des milliers : espace
+        - Séparateur des décimales : virgule
+        """
+        if value == 0:
+            return ""
+        
+        if with_decimals:
+            # Formatage avec 2 décimales
+            formatted = f"{value:,.2f}"
+        else:
+            # Formatage sans décimales (pour les jours par exemple)
+            formatted = f"{value:,.0f}"
+        
+        # Remplacer la virgule (séparateur des milliers) par un espace
+        # et le point (séparateur des décimales) par une virgule
+        formatted = formatted.replace(",", "TEMP").replace(".", ",").replace("TEMP", " ")
+        
+        return formatted
+    
     def init_ui(self):
         """Initialise l'interface utilisateur"""
         layout = QVBoxLayout()
@@ -746,10 +767,10 @@ class CompteResultatDisplay(QDialog):
             ("CHARGES", "header"),
             ("Achats et sous-traitance", "achats_sous_traitance"),
             ("Autres achats", "autres_achats"),
+            ("Dotation aux amortissements", "dotation_amortissements"),
             (self.get_cost_type_label(), "cout_direct"),  # Nom dynamique selon le type de coût
             ("  → Nombre de jours TOTAL", "nb_jours_total"),
             ("  → Coût moyen par jour", "cout_moyen_par_jour"),
-            ("Dotation aux amortissements", "dotation_amortissements"),
             ("CHARGES EXCEPTIONNELLES", "header"),
         ]
         
@@ -798,7 +819,7 @@ class CompteResultatDisplay(QDialog):
                 elif data_key.startswith("total_") or data_key.startswith("resultat_"):
                     # Calculs des totaux
                     value = self.calculate_total(data[period], data_key)
-                    item = QTableWidgetItem(f"{value:,.2f}" if value != 0 else "")
+                    item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     
                     font = QFont()
@@ -821,13 +842,13 @@ class CompteResultatDisplay(QDialog):
                     # Formatage spécial pour les nouveaux indicateurs
                     if data_key == "nb_jours_total":
                         # Afficher le nombre de jours sans décimales
-                        item = QTableWidgetItem(f"{value:.0f} jours" if value != 0 else "")
+                        item = QTableWidgetItem(f"{self.format_currency(value, False)} jours" if value != 0 else "")
                     elif data_key == "cout_moyen_par_jour":
                         # Afficher le coût moyen par jour avec 2 décimales et €/jour
-                        item = QTableWidgetItem(f"{value:,.2f} €/jour" if value != 0 else "")
+                        item = QTableWidgetItem(f"{self.format_currency(value)} €/jour" if value != 0 else "")
                     else:
                         # Formatage normal pour les autres données
-                        item = QTableWidgetItem(f"{value:,.2f}" if value != 0 else "")
+                        item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
                     
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     
@@ -843,11 +864,11 @@ class CompteResultatDisplay(QDialog):
                 if total_value is not None:
                     # Formatage spécial pour les nouveaux indicateurs dans la colonne TOTAL
                     if data_key == "nb_jours_total":
-                        item = QTableWidgetItem(f"{total_value:.0f} jours" if total_value != 0 else "")
+                        item = QTableWidgetItem(f"{self.format_currency(total_value, False)} jours" if total_value != 0 else "")
                     elif data_key == "cout_moyen_par_jour":
-                        item = QTableWidgetItem(f"{total_value:,.2f} €/jour" if total_value != 0 else "")
+                        item = QTableWidgetItem(f"{self.format_currency(total_value)} €/jour" if total_value != 0 else "")
                     else:
-                        item = QTableWidgetItem(f"{total_value:,.2f}" if total_value != 0 else "")
+                        item = QTableWidgetItem(self.format_currency(total_value) if total_value != 0 else "")
                     
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     
@@ -1052,10 +1073,14 @@ class CompteResultatDisplay(QDialog):
                             # Pour les colonnes de données, convertir en nombre si possible
                             try:
                                 # Enlever les espaces et virgules pour la conversion
-                                value_str = item.text().replace(",", "").replace(" ", "")
-                                if value_str:
+                                # Le texte contient maintenant des espaces comme séparateurs de milliers et des virgules comme décimales
+                                value_str = item.text().replace(" ", "").replace(",", ".")
+                                if value_str and value_str not in ["jours", "€/jour"]:
+                                    # Enlever les unités si présentes
+                                    value_str = value_str.replace(" jours", "").replace(" €/jour", "")
                                     cell.value = float(value_str)
-                                    cell.number_format = '#,##0.00'
+                                    # Format français : espace pour milliers, virgule pour décimales
+                                    cell.number_format = '# ##0,00'
                                 else:
                                     cell.value = ""
                             except ValueError:
