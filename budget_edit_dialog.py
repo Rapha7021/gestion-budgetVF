@@ -176,18 +176,85 @@ class BudgetEditDialog(QDialog):
         # --- Création table temps_travail si besoin ---
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS temps_travail (
-                projet_id INTEGER,
-                annee INTEGER,
-                direction TEXT,
-                categorie TEXT,
-                membre_id TEXT,
-                mois TEXT,
-                jours REAL,
-                PRIMARY KEY (projet_id, annee, membre_id, mois)
-            )
-        """)
+        
+        # Vérifier la structure actuelle de la table temps_travail
+        cursor.execute("PRAGMA table_info(temps_travail)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        # Si la table n'a pas la colonne membre_id, la migrer
+        if 'membre_id' not in column_names:
+            # Ajouter la colonne membre_id
+            try:
+                cursor.execute("ALTER TABLE temps_travail ADD COLUMN membre_id TEXT")
+                
+                # Mettre à jour les données existantes avec des membre_id générés
+                cursor.execute("SELECT ROWID, projet_id, annee, direction, categorie FROM temps_travail")
+                existing_rows = cursor.fetchall()
+                
+                # Générer des membre_id uniques pour les données existantes
+                member_counters = {}
+                for rowid, projet_id, annee, direction, categorie in existing_rows:
+                    key = f"{direction}_{categorie}"
+                    if key not in member_counters:
+                        member_counters[key] = 0
+                    
+                    membre_id = f"{direction}_{categorie}_{member_counters[key]}"
+                    member_counters[key] += 1
+                    
+                    cursor.execute("UPDATE temps_travail SET membre_id = ? WHERE ROWID = ?", 
+                                 (membre_id, rowid))
+                
+                # Maintenant créer la nouvelle table avec la nouvelle structure
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS temps_travail_new (
+                        projet_id INTEGER,
+                        annee INTEGER,
+                        direction TEXT,
+                        categorie TEXT,
+                        membre_id TEXT,
+                        mois TEXT,
+                        jours REAL,
+                        PRIMARY KEY (projet_id, annee, membre_id, mois)
+                    )
+                """)
+                
+                # Copier les données vers la nouvelle table
+                cursor.execute("""
+                    INSERT INTO temps_travail_new (projet_id, annee, direction, categorie, membre_id, mois, jours)
+                    SELECT projet_id, annee, direction, categorie, membre_id, mois, jours
+                    FROM temps_travail
+                """)
+                
+                # Supprimer l'ancienne table et renommer la nouvelle
+                cursor.execute("DROP TABLE temps_travail")
+                cursor.execute("ALTER TABLE temps_travail_new RENAME TO temps_travail")
+                
+            except sqlite3.Error as e:
+                print(f"Erreur lors de la migration: {e}")
+        else:
+            # La table existe déjà avec la bonne structure, vérifier la clé primaire
+            cursor.execute("PRAGMA table_info(temps_travail)")
+            columns = cursor.fetchall()
+            
+            # Si la structure est différente, recréer la table
+            expected_columns = ['projet_id', 'annee', 'direction', 'categorie', 'membre_id', 'mois', 'jours']
+            actual_columns = [col[1] for col in columns]
+            
+            if actual_columns != expected_columns:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS temps_travail (
+                        projet_id INTEGER,
+                        annee INTEGER,
+                        direction TEXT,
+                        categorie TEXT,
+                        membre_id TEXT,
+                        mois TEXT,
+                        jours REAL,
+                        PRIMARY KEY (projet_id, annee, membre_id, mois)
+                    )
+                """)
+        
         conn.commit()
         conn.close()
 
@@ -1115,47 +1182,102 @@ class BudgetEditDialog(QDialog):
         """Charge les données depuis la base pour une année spécifique et les met dans le tableau"""
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT direction, categorie, membre_id, mois, jours 
-            FROM temps_travail 
-            WHERE projet_id=? AND annee=?
-        """, (self.projet_id, int(year)))
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            return
-
-        # Met aussi les données en mémoire pour cet année
-        data = {}
-
-        # Trouve la ligne correspondante pour chaque donnée
-        for direction, categorie, membre_id, mois, jours in rows:
-            # Cherche la ligne correspondante par membre_id
-            target_row = None
-            for row, stored_membre_id in self.membre_mapping.items():
-                if stored_membre_id == membre_id:
-                    target_row = row
-                    break
-            
-            if target_row is not None and target_row not in self.direction_rows:
-                # Trouve la colonne du mois
-                for col in range(1, table.columnCount()):
-                    if colonnes[col] == mois:
-                        table.blockSignals(True)
-                        table.item(target_row, col).setText(str(jours))
-                        table.blockSignals(False)
-                        
-                        # Stocke aussi en mémoire
-                        key = (target_row, mois)
-                        data[key] = {
-                            'jours': jours,
-                            'direction': direction,
-                            'categorie': categorie,
-                            'membre_id': membre_id
-                        }
-                        break
         
-        # Sauvegarde les données en mémoire
-        if data:
-            self.budget_data[year] = data
+        # Vérifier si la colonne membre_id existe
+        cursor.execute("PRAGMA table_info(temps_travail)")
+        columns = cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        
+        if 'membre_id' in column_names:
+            cursor.execute("""
+                SELECT direction, categorie, membre_id, mois, jours 
+                FROM temps_travail 
+                WHERE projet_id=? AND annee=?
+            """, (self.projet_id, int(year)))
+            rows = cursor.fetchall()
+            
+            if rows:
+                # Met aussi les données en mémoire pour cet année
+                data = {}
+
+                # Trouve la ligne correspondante pour chaque donnée
+                for direction, categorie, membre_id, mois, jours in rows:
+                    # Cherche la ligne correspondante par membre_id
+                    target_row = None
+                    for row, stored_membre_id in self.membre_mapping.items():
+                        if stored_membre_id == membre_id:
+                            target_row = row
+                            break
+                    
+                    if target_row is not None and target_row not in self.direction_rows:
+                        # Trouve la colonne du mois
+                        for col in range(1, table.columnCount()):
+                            if colonnes[col] == mois:
+                                table.blockSignals(True)
+                                table.item(target_row, col).setText(str(jours))
+                                table.blockSignals(False)
+                                
+                                # Stocke aussi en mémoire
+                                key = (target_row, mois)
+                                data[key] = {
+                                    'jours': jours,
+                                    'direction': direction,
+                                    'categorie': categorie,
+                                    'membre_id': membre_id
+                                }
+                                break
+                
+                # Sauvegarde les données en mémoire
+                if data:
+                    self.budget_data[year] = data
+        else:
+            # Ancienne structure sans membre_id - méthode de fallback
+            cursor.execute("""
+                SELECT direction, categorie, mois, jours 
+                FROM temps_travail 
+                WHERE projet_id=? AND annee=?
+            """, (self.projet_id, int(year)))
+            rows = cursor.fetchall()
+            
+            if rows:
+                data = {}
+                # Méthode de fallback - cherche par direction et catégorie
+                for direction, categorie, mois, jours in rows:
+                    for row in range(table.rowCount()):
+                        if row in self.direction_rows:
+                            continue
+                        
+                        # Trouve la direction pour cette ligne
+                        current_direction = None
+                        for r in range(row + 1):
+                            if r in self.direction_rows:
+                                current_direction = table.item(r, 0).text()
+                        
+                        # Vérifie si c'est la bonne ligne
+                        if (current_direction == direction and 
+                            table.item(row, 0).text() == categorie):
+                            
+                            # Trouve la colonne du mois
+                            for col in range(1, table.columnCount()):
+                                if colonnes[col] == mois:
+                                    table.blockSignals(True)
+                                    table.item(row, col).setText(str(jours))
+                                    table.blockSignals(False)
+                                    
+                                    # Stocke aussi en mémoire avec le nouveau format
+                                    membre_id = self.membre_mapping.get(row, f"membre_{row}")
+                                    key = (row, mois)
+                                    data[key] = {
+                                        'jours': jours,
+                                        'direction': direction,
+                                        'categorie': categorie,
+                                        'membre_id': membre_id
+                                    }
+                                    break
+                            break
+                
+                # Sauvegarde les données en mémoire
+                if data:
+                    self.budget_data[year] = data
+        
+        conn.close()
