@@ -985,13 +985,32 @@ class ProjectForm(QDialog):
 
     def add_image(self):
         files, _ = QFileDialog.getOpenFileNames(self, 'Sélectionner des images', '', 'Images (*.png *.jpg *.jpeg *.bmp *.gif)')
-        images_dir = os.path.join(os.path.dirname(__file__), 'images')
+        
         for f in files:
             if os.path.isfile(f):
-                dest = os.path.join(images_dir, os.path.basename(f))
-                if not os.path.exists(dest):
-                    shutil.copy2(f, dest)
-                self.images_list.addItem(os.path.relpath(dest, os.path.dirname(__file__)))
+                # Lire le fichier image en tant que données binaires
+                with open(f, 'rb') as img_file:
+                    img_data = img_file.read()
+                
+                # Ajouter le nom du fichier à la liste d'affichage
+                filename = os.path.basename(f)
+                self.images_list.addItem(filename)
+                
+                # Si le projet existe déjà, sauvegarder l'image en base de données
+                if self.projet_id:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)',
+                        (self.projet_id, filename, img_data)
+                    )
+                    conn.commit()
+                    conn.close()
+                else:
+                    # Pour les nouveaux projets, stocker temporairement les données d'image
+                    if not hasattr(self, 'temp_images'):
+                        self.temp_images = []
+                    self.temp_images.append({'name': filename, 'data': img_data})
 
     def add_invest(self):
         dialog = InvestDialog(self)
@@ -1245,6 +1264,14 @@ class ProjectForm(QDialog):
                     cursor.execute('''INSERT INTO equipe (projet_id, direction, type, nombre) 
                                       VALUES (?, ?, ?, ?)''',
                                   (projet_id, direction, type_, nombre))
+        
+        # Sauvegarde des images temporaires (pour les nouveaux projets)
+        if not self.projet_id and hasattr(self, 'temp_images'):  # Nouveau projet avec images temporaires
+            for img_data in self.temp_images:
+                cursor.execute(
+                    'INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)',
+                    (projet_id, img_data['name'], img_data['data'])
+                )
                 
         conn.commit()
         conn.close()
@@ -1301,7 +1328,7 @@ class ProjectForm(QDialog):
         cursor.execute('SELECT nom FROM images WHERE projet_id=?', (self.projet_id,))
         self.images_list.clear()
         for (img_name,) in cursor.fetchall():
-            self.images_list.addItem(os.path.join('images', img_name))
+            self.images_list.addItem(img_name)  # Juste le nom du fichier, pas le chemin complet
             
         # Investissements liés
         self.invest_list.clear()
@@ -1422,23 +1449,23 @@ class ProjectForm(QDialog):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 if confirm == QMessageBox.StandardButton.Yes:
-                    # Vérifie si l'image est utilisée dans d'autres projets avant suppression du fichier
-                    img_rel_path = item.text()
-                    img_name = os.path.basename(img_rel_path)
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT COUNT(*) FROM images WHERE nom=?', (img_name,))
-                    count = cursor.fetchone()[0]
-                    conn.close()
-                    # Si cette image n'est plus utilisée (après suppression de la ligne courante)
-                    if count <= 1:
-                        img_path = os.path.join(os.path.dirname(__file__), img_rel_path)
-                        try:
-                            if os.path.isfile(img_path):
-                                os.remove(img_path)
-                        except Exception:
-                            pass  # Suppression silencieuse
-                    self.images_list.takeItem(self.images_list.row(item))
+                    img_name = item.text()
+                    row = self.images_list.row(item)
+                    
+                    if self.projet_id:
+                        # Projet existant : supprimer de la base de données
+                        conn = sqlite3.connect(DB_PATH)
+                        cursor = conn.cursor()
+                        cursor.execute('DELETE FROM images WHERE projet_id=? AND nom=?', (self.projet_id, img_name))
+                        conn.commit()
+                        conn.close()
+                    else:
+                        # Nouveau projet : supprimer des images temporaires
+                        if hasattr(self, 'temp_images'):
+                            self.temp_images = [img for img in self.temp_images if img['name'] != img_name]
+                    
+                    # Supprimer de la liste d'affichage
+                    self.images_list.takeItem(row)
         # Si clic droit sur une zone vide, rien ne se passe
 
 class InvestDialog(QDialog):

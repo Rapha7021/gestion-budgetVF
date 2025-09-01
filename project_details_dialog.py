@@ -155,12 +155,19 @@ class ProjectDetailsDialog(QDialog):
             try:
                 from PyQt6.QtGui import QPixmap
                 pixmap = QPixmap()
-                pixmap.loadFromData(data)
-                img_widget = QLabel()
-                img_widget.setPixmap(pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio))
-                img_hbox.addWidget(img_widget)
-            except Exception:
-                pass
+                if pixmap.loadFromData(data):
+                    img_widget = QLabel()
+                    img_widget.setPixmap(pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio))
+                    img_widget.setStyleSheet("border: 1px solid gray; margin: 2px;")
+                    img_widget.setToolTip(nom)  # Afficher le nom de l'image au survol
+                    img_hbox.addWidget(img_widget)
+            except Exception as e:
+                # En cas d'erreur, afficher un placeholder
+                error_widget = QLabel(f"Erreur image:\n{nom}")
+                error_widget.setFixedSize(150, 150)
+                error_widget.setStyleSheet("border: 1px solid red; background-color: #ffeeee; color: red;")
+                error_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img_hbox.addWidget(error_widget)
         main_layout.addLayout(grid)
         main_layout.addLayout(img_hbox)
 
