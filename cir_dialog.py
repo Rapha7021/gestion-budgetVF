@@ -38,9 +38,9 @@ class CIRDialog(QDialog):
             self.table.setItem(0, col, QTableWidgetItem(""))
 
         # Ajouter des infobulles pour les colonnes du tableau CIR
-        self.table.horizontalHeaderItem(0).setToolTip("Coefficient pour les charges directes associées aux temps de travail")
-        self.table.horizontalHeaderItem(1).setToolTip("Coefficient pour les charges directes associées aux amortissements")
-        self.table.horizontalHeaderItem(2).setToolTip("Taux de \"subvention\" CIR")
+        self.table.horizontalHeaderItem(0).setToolTip("Coefficient pour les charges directes associées aux temps de travail (≥ 1)")
+        self.table.horizontalHeaderItem(1).setToolTip("Coefficient pour les charges directes associées aux amortissements (≥ 1)")
+        self.table.horizontalHeaderItem(2).setToolTip("Taux de \"subvention\" CIR (entre 0 et 1)")
 
         # Boutons
         btn_layout = QHBoxLayout()
@@ -67,12 +67,24 @@ class CIRDialog(QDialog):
             if item and item.text():
                 try:
                     value = float(item.text().replace(',', '.'))
-                    if not (0 <= value <= 1):
-                        raise ValueError("Value out of range")
+                    
+                    # Validation spécifique selon la colonne
+                    if column in [0, 1]:  # K1 et K2
+                        if value < 1:
+                            raise ValueError("K1 et K2 doivent être >= 1")
+                    elif column == 2:  # K3
+                        if not (0 <= value <= 1):
+                            raise ValueError("K3 doit être entre 0 et 1")
+                    
                     # Limiter à deux chiffres après la virgule
                     item.setText(f"{value:.2f}")
-                except ValueError:
-                    QMessageBox.warning(self, "Erreur", "Veuillez entrer un nombre entre 0 et 1 avec deux chiffres après la virgule.")
+                except ValueError as e:
+                    if "K1 et K2" in str(e):
+                        QMessageBox.warning(self, "Erreur", "K1 et K2 doivent être des nombres supérieurs ou égaux à 1.")
+                    elif "K3 doit être" in str(e):
+                        QMessageBox.warning(self, "Erreur", "K3 doit être un nombre entre 0 et 1.")
+                    else:
+                        QMessageBox.warning(self, "Erreur", "Veuillez entrer un nombre valide.")
                     self.table.blockSignals(True)
                     item.setText("")
                     self.table.blockSignals(False)
