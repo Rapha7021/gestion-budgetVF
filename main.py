@@ -510,7 +510,7 @@ class ProjectForm(QDialog):
         self.theme_search = QLineEdit()
         self.theme_search.setPlaceholderText('Rechercher un thème...')
         self.theme_listwidget = QListWidget()
-        self.theme_listwidget.setMaximumHeight(50)  # Encore plus petit
+        self.theme_listwidget.setMaximumHeight(120)  # Hauteur augmentée pour une meilleure visibilité
         theme_vbox.addWidget(self.theme_search)
         theme_vbox.addWidget(self.theme_listwidget)
         self.tag_area = QScrollArea()
