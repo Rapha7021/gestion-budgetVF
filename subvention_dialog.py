@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QFormLayout, QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QLineEdit, QFrame
 import sqlite3
+from utils import format_montant
 
 class SubventionDialog(QDialog):
     def __init__(self, parent=None, data=None):
@@ -378,32 +379,32 @@ class SubventionDialog(QDialog):
         if self.cb_temps.isChecked():
             temps_travail = projet_data['temps_travail_total'] * self.cd_spin.value()
             montant_temps = temps_travail * self.spin_temps.value()
-            detail_lines.append(f"Temps de travail: {projet_data['temps_travail_total']:.2f} € x {self.cd_spin.value():.2f} x {self.spin_temps.value():.2f} = {montant_temps:.2f} €")
+            detail_lines.append(f"Temps de travail: {format_montant(projet_data['temps_travail_total'])} x {self.cd_spin.value():.2f} x {self.spin_temps.value():.2f} = {format_montant(montant_temps)}")
             sub_total += montant_temps
             
         if self.cb_externes.isChecked():
             montant_externes = projet_data['depenses_externes'] * self.spin_externes.value()
-            detail_lines.append(f"Dépenses externes: {projet_data['depenses_externes']:.2f} € x {self.spin_externes.value():.2f} = {montant_externes:.2f} €")
+            detail_lines.append(f"Dépenses externes: {format_montant(projet_data['depenses_externes'])} x {self.spin_externes.value():.2f} = {format_montant(montant_externes)}")
             sub_total += montant_externes
             
         if self.cb_autres.isChecked():
             montant_autres = projet_data['autres_achats'] * self.spin_autres.value()
-            detail_lines.append(f"Autres achats: {projet_data['autres_achats']:.2f} € x {self.spin_autres.value():.2f} = {montant_autres:.2f} €")
+            detail_lines.append(f"Autres achats: {format_montant(projet_data['autres_achats'])} x {self.spin_autres.value():.2f} = {format_montant(montant_autres)}")
             sub_total += montant_autres
             
         if self.cb_dotation.isChecked():
             montant_amort = projet_data['amortissements'] * self.spin_dotation.value()
-            detail_lines.append(f"Amortissements: {projet_data['amortissements']:.2f} € x {self.spin_dotation.value():.2f} = {montant_amort:.2f} €")
+            detail_lines.append(f"Amortissements: {format_montant(projet_data['amortissements'])} x {self.spin_dotation.value():.2f} = {format_montant(montant_amort)}")
             sub_total += montant_amort
         
         # Ajouter la ligne de sous-total et le calcul final
-        detail_lines.append(f"Sous-total: {sub_total:.2f} € x {self.taux_spin.value():.0f}% = {montant:.2f} €")
+        detail_lines.append(f"Sous-total: {format_montant(sub_total)} x {self.taux_spin.value():.0f}% = {format_montant(montant)}")
         
         # Joindre toutes les lignes en une seule chaîne
         detail_text = "\n".join(detail_lines)
         
         # Mettre à jour le label avec formatage du montant
-        self.montant_label.setText(f"{montant:,.2f} €".replace(",", " ").replace(".", ","))
+        self.montant_label.setText(format_montant(montant))
         
         # Ajouter une infobulle pour voir le détail du calcul
         self.montant_label.setToolTip(detail_text)
@@ -424,7 +425,7 @@ class SubventionDialog(QDialog):
             assiette += self.spin_autres.value() * projet_data['autres_achats']
         if self.cb_dotation.isChecked():
             assiette += self.spin_dotation.value() * projet_data['amortissements']
-        self.assiette_label.setText(f"{assiette:,.2f} €".replace(",", " ").replace(".", ","))
+        self.assiette_label.setText(format_montant(assiette))
         
     def validate_and_accept(self):
         # Vérifier que le nom est renseigné

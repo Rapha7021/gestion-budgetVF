@@ -3,6 +3,7 @@ from PyQt6.QtCore import Qt
 import sqlite3
 import os
 import datetime
+from utils import format_montant
 DB_PATH = 'gestion_budget.db'
 
 class ProjectDetailsDialog(QDialog):
@@ -80,9 +81,9 @@ class ProjectDetailsDialog(QDialog):
         # Affichage des coûts
         self.budget_vbox = QVBoxLayout()
         self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
-        self.budget_vbox.addWidget(QLabel(f"Coût chargé : {couts['charge']:.2f} €"))
-        self.budget_vbox.addWidget(QLabel(f"Coût production : {couts['direct']:.2f} €"))
-        self.budget_vbox.addWidget(QLabel(f"Coût complet : {couts['complet']:.2f} €"))
+        self.budget_vbox.addWidget(QLabel(f"Coût chargé : {format_montant(couts['charge'])}"))
+        self.budget_vbox.addWidget(QLabel(f"Coût production : {format_montant(couts['direct'])}"))
+        self.budget_vbox.addWidget(QLabel(f"Coût complet : {format_montant(couts['complet'])}"))
         grid.addLayout(self.budget_vbox, 0, 2)
         
         # En haut à gauche
@@ -119,7 +120,7 @@ class ProjectDetailsDialog(QDialog):
         invest_text = "<b>Investissements :</b>\n"
         if investissements:
             for montant, date_achat, duree in investissements:
-                invest_text += f"- {montant} € | Achat: {date_achat} | Durée: {duree} ans\n"
+                invest_text += f"- {format_montant(montant)} | Achat: {date_achat} | Durée: {duree} ans\n"
         else:
             invest_text += "Aucun"
         center_vbox.addWidget(QLabel(invest_text))
@@ -536,7 +537,7 @@ class ProjectDetailsDialog(QDialog):
                 
                 # Ajouter un séparateur et afficher l'assiette éligible CIR
                 self.budget_vbox.addWidget(QLabel(""))
-                cir_label = QLabel(f"Assiette éligible \"CIR\" : {montant_net_eligible:,.2f} € (taux : {taux_k3_percent:.0f} %)".replace(",", " "))
+                cir_label = QLabel(f"Assiette éligible \"CIR\" : {format_montant(montant_net_eligible)} (taux : {taux_k3_percent:.0f} %)")
                 self.budget_vbox.addWidget(cir_label)
 
     def refresh_budget(self):
@@ -582,9 +583,9 @@ class ProjectDetailsDialog(QDialog):
                     missing_data = True
 
             # Mise à jour des labels
-            self.budget_vbox.itemAt(1).widget().setText(f"Coût chargé : {couts['charge']:.2f} €")
-            self.budget_vbox.itemAt(2).widget().setText(f"Coût production : {couts['direct']:.2f} €")
-            self.budget_vbox.itemAt(3).widget().setText(f"Coût complet : {couts['complet']:.2f} €")
+            self.budget_vbox.itemAt(1).widget().setText(f"Coût chargé : {format_montant(couts['charge'])}")
+            self.budget_vbox.itemAt(2).widget().setText(f"Coût production : {format_montant(couts['direct'])}")
+            self.budget_vbox.itemAt(3).widget().setText(f"Coût complet : {format_montant(couts['complet'])}")
 
             if missing_data:
                 self.budget_vbox.addWidget(QLabel("<i>Note : Certaines données sont manquantes pour le calcul.</i>"))
@@ -683,7 +684,7 @@ class ProjectDetailsDialog(QDialog):
                 total_subventions += montant
 
                 # Afficher l'assiette éligible (plafonnée) avec le taux
-                subv_label = QLabel(f"Assiette éligible \"{nom}\" : {assiette_eligible:,.2f} € (taux : {taux:.0f} %)".replace(",", " "))
+                subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_eligible)} (taux : {taux:.0f} %)")
                 self.budget_vbox.addWidget(subv_label)
 
             # Calculer et afficher le CIR si le projet l'a activé
