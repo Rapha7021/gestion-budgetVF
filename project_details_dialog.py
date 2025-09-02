@@ -530,14 +530,19 @@ class ProjectDetailsDialog(QDialog):
             # Soustraire les subventions
             montant_net_eligible = montant_eligible - total_subventions
 
-            # Calculer l'assiette éligible CIR (avant × K3)
+            # Ajouter un séparateur
+            self.budget_vbox.addWidget(QLabel(""))
+            
+            # Vérifier si le CIR est applicable
             if montant_net_eligible > 0:
-                # Afficher l'assiette éligible avec le taux K3
+                # CIR applicable - afficher l'assiette éligible avec le taux K3
                 taux_k3_percent = k3 * 100  # Convertir en pourcentage
-                
-                # Ajouter un séparateur et afficher l'assiette éligible CIR
-                self.budget_vbox.addWidget(QLabel(""))
                 cir_label = QLabel(f"Assiette éligible \"CIR\" : {format_montant(montant_net_eligible)} (taux : {taux_k3_percent:.0f} %)")
+                self.budget_vbox.addWidget(cir_label)
+            else:
+                # CIR non applicable - afficher le message explicatif
+                cir_label = QLabel("CIR non applicable (subventions > dépenses éligibles)")
+                cir_label.setStyleSheet("color: #e74c3c; font-style: italic;")  # Rouge et italique pour bien voir
                 self.budget_vbox.addWidget(cir_label)
 
     def refresh_budget(self):
