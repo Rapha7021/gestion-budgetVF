@@ -386,31 +386,67 @@ class BudgetEditDialog(QDialog):
             months = []
             if not self.date_debut or not self.date_fin:
                 return [(m, mois_fr[m]) for m in range(1, 13)]
+            
             def extract_ym(date_str):
-                match = re.search(r'(\d{2})[/-](\d{4})', date_str)
+                # Essaie plusieurs formats de date
+                date_str = str(date_str).strip()
+                
+                # Format MM/YYYY ou MM-YYYY
+                match = re.search(r'(\d{1,2})[/-](\d{4})', date_str)
                 if match:
                     month = int(match.group(1))
                     year = int(match.group(2))
                     return year, month
-                match = re.search(r'(\d{4})[/-](\d{2})', date_str)
+                
+                # Format YYYY/MM ou YYYY-MM  
+                match = re.search(r'(\d{4})[/-](\d{1,2})', date_str)
                 if match:
                     year = int(match.group(1))
                     month = int(match.group(2))
                     return year, month
+                
+                # Format DD/MM/YYYY ou DD-MM-YYYY
+                match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', date_str)
+                if match:
+                    day = int(match.group(1))
+                    month = int(match.group(2))
+                    year = int(match.group(3))
+                    return year, month
+                
+                # Format YYYY/MM/DD ou YYYY-MM-DD
+                match = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', date_str)
+                if match:
+                    year = int(match.group(1))
+                    month = int(match.group(2))
+                    day = int(match.group(3))
+                    return year, month
+                
                 return None, None
+            
             y_start, m_start = extract_ym(self.date_debut)
             y_end, m_end = extract_ym(self.date_fin)
             year = int(year)
+            
+            
             if y_start is None or y_end is None:
                 return [(m, mois_fr[m]) for m in range(1, 13)]
+            
             if year == y_start and year == y_end:
+                # Même année pour début et fin
                 months = [(m, mois_fr[m]) for m in range(m_start, m_end + 1)]
             elif year == y_start:
+                # Année de début du projet
                 months = [(m, mois_fr[m]) for m in range(m_start, 13)]
             elif year == y_end:
+                # Année de fin du projet
                 months = [(m, mois_fr[m]) for m in range(1, m_end + 1)]
             elif y_start < year < y_end:
+                # Année intermédiaire
                 months = [(m, mois_fr[m]) for m in range(1, 13)]
+            else:
+                # Année hors période du projet
+                months = []
+            
             return months
 
         def build_table_for_year(year):
@@ -530,53 +566,91 @@ class BudgetEditDialog(QDialog):
                 if widget:
                     widget.setParent(None)
 
-            # Utilise la même fonction pour obtenir les mois de l'année
-            months = get_months_for_year(year)
-            
-
-            # Colonnes : uniquement Montant et Détail pour chaque mois
-            colonnes = []
-            for _, mois in months:
-                colonnes.extend([f"{mois} - Montant", f"{mois} - Détail"])
-
+            # Nouveau tableau simplifié : Montant | Détail | Mois
             table = QTableWidget()
-            # On commence avec une seule ligne, mais on pourra ajouter des lignes
-            table.setRowCount(1)
-            table.setColumnCount(len(colonnes))
-            table.setHorizontalHeaderLabels(colonnes)
+            table.setRowCount(0)  # Commence vide
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Montant", "Détail", "Mois"])
+            
+            # Largeurs des colonnes
+            table.setColumnWidth(0, 100)  # Montant
+            table.setColumnWidth(1, 300)  # Détail
+            table.setColumnWidth(2, 120)  # Mois
 
-            # Redimensionne les colonnes montant et détail
-            for col in range(len(colonnes)):
-                if "Montant" in colonnes[col]:
-                    table.setColumnWidth(col, 120)
-                elif "Détail" in colonnes[col]:
-                    table.setColumnWidth(col, 200)
-
-            # Remplit la première ligne
-            for col in range(len(colonnes)):
-                item_mois = QTableWidgetItem("")
-                item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                table.setItem(0, col, item_mois)
-
-            # Ajout du bouton pour ajouter une ligne
-            btn_add_row = QPushButton("Ajouter une ligne")
             def add_row():
-                table.insertRow(table.rowCount())
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(table.rowCount()-1, col, item_mois)
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.recettes_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
+
+            btn_add_row = QPushButton("Ajouter une ligne")
             btn_add_row.clicked.connect(add_row)
+            
+            btn_delete_row = QPushButton("Supprimer la ligne sélectionnée")
+            def delete_row():
+                current_row = table.currentRow()
+                if current_row >= 0:
+                    reply = QMessageBox.question(
+                        self,
+                        "Confirmation de suppression",
+                        "Êtes-vous sûr de vouloir supprimer cette ligne ?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # Suppression visuelle
+                        table.removeRow(current_row)
+                        self.recettes_modified_years.add(year)
+                        
+                        # Sauvegarde immédiate pour synchroniser la base de données
+                        self.save_recettes_table_to_memory(year)
+                        conn = sqlite3.connect('gestion_budget.db')
+                        cursor = conn.cursor()
+                        
+                        # Supprime toutes les recettes de cette année
+                        cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", 
+                                     (self.projet_id, int(year)))
+                        
+                        # Recrée les données à partir du tableau actuel
+                        data = self.recettes_data.get(year, {})
+                        for (ligne_index, mois), (montant, detail) in data.items():
+                            if montant != 0 or detail.strip():
+                                cursor.execute("""
+                                    INSERT OR REPLACE INTO recettes 
+                                    (projet_id, annee, ligne_index, mois, montant, detail) 
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                """, (self.projet_id, int(year), ligne_index, mois, montant, detail))
+                        
+                        conn.commit()
+                        conn.close()
+            btn_delete_row.clicked.connect(delete_row)
 
-            # Charge systématiquement les données depuis la base et restaure le tableau
-            self.load_recettes_data_from_db_for_year(year, table, colonnes)
+            # Charge les données depuis la base de données
+            self.load_recettes_data_from_db_for_year(year, table)
 
-            # Ajout du contrôle de saisie sur les cellules Montant
+            # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
             double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
-                col = item.column()
-                if "Montant" in colonnes[col]:
+                if item.column() == 0:  # Colonne Montant
                     value = item.text()
                     state = double_validator.validate(value, 0)[0]
                     if state != QDoubleValidator.State.Acceptable and value != "":
@@ -585,47 +659,55 @@ class BudgetEditDialog(QDialog):
                 self.recettes_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
+            # Ajout des widgets
+            buttons_layout = QHBoxLayout()
+            buttons_layout.addWidget(btn_add_row)
+            buttons_layout.addWidget(btn_delete_row)
+            buttons_layout.addStretch()
+            
+            buttons_widget = QWidget()
+            buttons_widget.setLayout(buttons_layout)
+            
             self.recettes_layout.addWidget(table)
-            self.recettes_layout.addWidget(btn_add_row)
-            aide_label = QLabel("Remplissez les montants et détails pour chaque recette.")
+            self.recettes_layout.addWidget(buttons_widget)
+            aide_label = QLabel("Saisissez le montant, le détail et sélectionnez le mois pour chaque recette.")
             self.recettes_layout.addWidget(aide_label)
             self.recettes_table = table
-            self.recettes_colonnes = colonnes
 
         def save_recettes_table_to_memory(self, year):
             """Sauvegarde les valeurs du tableau recettes en mémoire pour l'année donnée"""
-            if not hasattr(self, 'recettes_table') or not hasattr(self, 'recettes_colonnes'):
+            if not hasattr(self, 'recettes_table'):
                 return
             
             table = self.recettes_table
-            colonnes = self.recettes_colonnes
             data = {}
             
             for row in range(table.rowCount()):
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois = col_montant_name.split(" - ")[0]
-                        montant_item = table.item(row, col_index)
-                        detail_item = table.item(row, col_index + 1)
-                        montant = montant_item.text() if montant_item else ""
-                        detail = detail_item.text() if detail_item else ""
-                        try:
-                            montant_val = float(montant) if montant else 0
-                        except Exception:
-                            montant_val = 0
-                        if montant_val != 0 or detail:
-                            # Utilise le numéro de ligne comme identifiant unique
-                            key = (row, mois)
-                            data[key] = (montant_val, detail)
-                    col_index += 2
+                # Récupération des valeurs de chaque ligne
+                montant_item = table.item(row, 0)  # Colonne Montant
+                detail_item = table.item(row, 1)   # Colonne Détail
+                mois_combo = table.cellWidget(row, 2)  # Colonne Mois (ComboBox)
+                
+                montant = montant_item.text() if montant_item else ""
+                detail = detail_item.text() if detail_item else ""
+                mois = mois_combo.currentText() if mois_combo else ""
+                
+                # Ne sauvegarde que si au moins un champ est rempli
+                try:
+                    montant_val = float(montant) if montant else 0
+                except Exception:
+                    montant_val = 0
+                    
+                if montant_val != 0 or detail.strip() or mois:
+                    # Utilise le numéro de ligne comme identifiant unique
+                    key = (row, mois)
+                    data[key] = (montant_val, detail)
             
             self.recettes_data[year] = data
             if data:
                 self.recettes_modified_years.add(year)
 
-        def load_recettes_data_from_db_for_year(self, year, table, colonnes):
+        def load_recettes_data_from_db_for_year(self, year, table):
             """Charge les données des recettes depuis la base pour une année spécifique et les met dans le tableau"""
             conn = sqlite3.connect('gestion_budget.db')
             cursor = conn.cursor()
@@ -633,39 +715,64 @@ class BudgetEditDialog(QDialog):
                 SELECT ligne_index, mois, montant, detail 
                 FROM recettes 
                 WHERE projet_id=? AND annee=?
-                ORDER BY ligne_index, mois
+                ORDER BY ligne_index
             """, (self.projet_id, int(year)))
             rows = cursor.fetchall()
             conn.close()
 
             if not rows:
+                # Ajoute une ligne vide par défaut
+                table.insertRow(0)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.recettes_modified_years.add(year))
+                table.setCellWidget(0, 2, mois_combo)
                 return
 
-            # Met les données dans le tableau
-            # D'abord on s'assure qu'on a assez de lignes
-            max_ligne_index = max(row[0] for row in rows) if rows else 0
-            while table.rowCount() <= max_ligne_index:
-                table.insertRow(table.rowCount())
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(table.rowCount()-1, col, item_mois)
-
+            # Charge les données existantes
             for ligne_index, mois, montant, detail in rows:
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois_col = col_montant_name.split(" - ")[0]
-                        if mois_col == mois:
-                            table.blockSignals(True)
-                            if montant:
-                                table.item(ligne_index, col_index).setText(str(montant))
-                            if detail:
-                                table.item(ligne_index, col_index + 1).setText(detail)
-                            table.blockSignals(False)
-                            break
-                    col_index += 2
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem(str(montant) if montant else "")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem(detail if detail else "")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                if mois:
+                    index = mois_combo.findText(mois)
+                    if index >= 0:
+                        mois_combo.setCurrentIndex(index)
+                mois_combo.currentTextChanged.connect(lambda: self.recettes_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
 
         # Affecte les méthodes à l'instance
         self.save_recettes_table_to_memory = save_recettes_table_to_memory.__get__(self)
@@ -691,46 +798,91 @@ class BudgetEditDialog(QDialog):
                 if widget:
                     widget.setParent(None)
 
-            months = get_months_for_year(year)
-            colonnes = []
-            for _, mois in months:
-                colonnes.extend([f"{mois} - Montant", f"{mois} - Détail"])
-
+            # Nouveau tableau simplifié : Montant | Détail | Mois
             table = QTableWidget()
-            table.setRowCount(len(self.depenses_categories))
-            table.setColumnCount(len(colonnes))
-            table.setHorizontalHeaderLabels(colonnes)
+            table.setRowCount(0)  # Commence vide
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Montant", "Détail", "Mois"])
+            
+            # Largeurs des colonnes
+            table.setColumnWidth(0, 100)  # Montant
+            table.setColumnWidth(1, 300)  # Détail
+            table.setColumnWidth(2, 120)  # Mois
 
-            for col in range(len(colonnes)):
-                if "Montant" in colonnes[col]:
-                    table.setColumnWidth(col, 120)
-                elif "Détail" in colonnes[col]:
-                    table.setColumnWidth(col, 200)
-
-            for row in range(len(self.depenses_categories)):
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(row, col, item_mois)
+            def add_row():
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.depenses_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
 
             btn_add_row = QPushButton("Ajouter une ligne")
-            def add_row():
-                table.insertRow(table.rowCount())
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(table.rowCount()-1, col, item_mois)
             btn_add_row.clicked.connect(add_row)
+            
+            btn_delete_row = QPushButton("Supprimer la ligne sélectionnée")
+            def delete_row():
+                current_row = table.currentRow()
+                if current_row >= 0:
+                    reply = QMessageBox.question(
+                        self,
+                        "Confirmation de suppression",
+                        "Êtes-vous sûr de vouloir supprimer cette ligne ?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # Suppression visuelle
+                        table.removeRow(current_row)
+                        self.depenses_modified_years.add(year)
+                        
+                        # Sauvegarde immédiate pour synchroniser la base de données
+                        self.save_depenses_table_to_memory(year)
+                        conn = sqlite3.connect('gestion_budget.db')
+                        cursor = conn.cursor()
+                        
+                        # Supprime toutes les dépenses de cette année
+                        cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", 
+                                     (self.projet_id, int(year)))
+                        
+                        # Recrée les données à partir du tableau actuel
+                        data = self.depenses_data.get(year, {})
+                        for (row_idx, mois), (montant, detail) in data.items():
+                            if montant != 0 or detail.strip():
+                                cursor.execute("""
+                                    INSERT OR REPLACE INTO depenses 
+                                    (projet_id, annee, categorie, mois, montant, detail) 
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                """, (self.projet_id, int(year), detail, mois, montant, detail))
+                        
+                        conn.commit()
+                        conn.close()
+            btn_delete_row.clicked.connect(delete_row)
 
-            # Charge systématiquement les données depuis la base et restaure le tableau
-            self.load_depenses_data_from_db_for_year(year, table, colonnes, self.depenses_categories)
+            # Charge les données depuis la base de données
+            self.load_depenses_data_from_db_for_year(year, table)
 
-            # Ajout du contrôle de saisie sur les cellules Montant
+            # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
             double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
-                col = item.column()
-                if "Montant" in colonnes[col]:
+                if item.column() == 0:  # Colonne Montant
                     value = item.text()
                     state = double_validator.validate(value, 0)[0]
                     if state != QDoubleValidator.State.Acceptable and value != "":
@@ -739,76 +891,115 @@ class BudgetEditDialog(QDialog):
                 self.depenses_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
+            # Ajout des widgets
+            buttons_layout = QHBoxLayout()
+            buttons_layout.addWidget(btn_add_row)
+            buttons_layout.addWidget(btn_delete_row)
+            buttons_layout.addStretch()
+            
+            buttons_widget = QWidget()
+            buttons_widget.setLayout(buttons_layout)
+            
             self.depenses_layout.addWidget(table)
-            self.depenses_layout.addWidget(btn_add_row)
-            aide_label = QLabel("Remplissez les montants et détails pour chaque dépense.")
+            self.depenses_layout.addWidget(buttons_widget)
+            aide_label = QLabel("Saisissez le montant, le détail et sélectionnez le mois pour chaque dépense externe.")
             self.depenses_layout.addWidget(aide_label)
             self.depenses_table = table
-            self.depenses_colonnes = colonnes
 
         def save_depenses_table_to_memory(self, year):
-            if not hasattr(self, 'depenses_table') or not hasattr(self, 'depenses_colonnes'):
+            if not hasattr(self, 'depenses_table'):
                 return
             table = self.depenses_table
-            colonnes = self.depenses_colonnes
-            categories = self.depenses_categories
             data = {}
             for row in range(table.rowCount()):
-                if row < len(categories):
-                    categorie = categories[row]
-                else:
-                    categorie = f"Catégorie {row+1}"
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois = col_montant_name.split(" - ")[0]
-                        montant_item = table.item(row, col_index)
-                        detail_item = table.item(row, col_index + 1)
-                        montant = montant_item.text() if montant_item else ""
-                        detail = detail_item.text() if detail_item else ""
-                        try:
-                            montant_val = float(montant) if montant else 0
-                        except Exception:
-                            montant_val = 0
-                        if montant_val != 0 or detail:
-                            key = (categorie, mois)
-                            data[key] = (montant_val, detail)
-                    col_index += 2
+                # Récupération des valeurs de chaque ligne
+                montant_item = table.item(row, 0)  # Colonne Montant
+                detail_item = table.item(row, 1)   # Colonne Détail
+                mois_combo = table.cellWidget(row, 2)  # Colonne Mois (ComboBox)
+                
+                montant = montant_item.text() if montant_item else ""
+                detail = detail_item.text() if detail_item else ""
+                mois = mois_combo.currentText() if mois_combo else ""
+                
+                # Ne sauvegarde que si au moins un champ est rempli
+                try:
+                    montant_val = float(montant) if montant else 0
+                except Exception:
+                    montant_val = 0
+                    
+                if montant_val != 0 or detail.strip() or mois:
+                    # Utilise le numéro de ligne et le mois pour créer une clé unique
+                    key = (f"Ligne {row+1}", mois)
+                    data[key] = (montant_val, detail)
             self.depenses_data[year] = data
             if data:
                 self.depenses_modified_years.add(year)
 
-        def load_depenses_data_from_db_for_year(self, year, table, colonnes, categories):
+        def load_depenses_data_from_db_for_year(self, year, table):
             conn = sqlite3.connect('gestion_budget.db')
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT categorie, mois, montant, detail 
                 FROM depenses 
                 WHERE projet_id=? AND annee=?
+                ORDER BY categorie
             """, (self.projet_id, int(year)))
             rows = cursor.fetchall()
             conn.close()
+            
             if not rows:
+                # Ajoute une ligne vide par défaut
+                table.insertRow(0)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.depenses_modified_years.add(year))
+                table.setCellWidget(0, 2, mois_combo)
                 return
 
-            # Remplit le tableau directement (comme pour temps de travail)
+            # Charge les données existantes
             for categorie, mois, montant, detail in rows:
-                for row in range(table.rowCount()):
-                    if row < len(categories):
-                        cat_row = categories[row]
-                    else:
-                        cat_row = f"Catégorie {row+1}"
-                    if cat_row == categorie:
-                        for col in range(0, len(colonnes), 2):
-                            mois_col = colonnes[col].split(" - ")[0]
-                            if mois_col == mois:
-                                table.blockSignals(True)
-                                table.item(row, col).setText(str(montant) if montant else "")
-                                table.item(row, col+1).setText(detail if detail else "")
-                                table.blockSignals(False)
-                                break
-                        break
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem(str(montant) if montant else "")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem(detail if detail else "")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                if mois:
+                    index = mois_combo.findText(mois)
+                    if index >= 0:
+                        mois_combo.setCurrentIndex(index)
+                mois_combo.currentTextChanged.connect(lambda: self.depenses_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
 
         self.save_depenses_table_to_memory = save_depenses_table_to_memory.__get__(self)
         self.load_depenses_data_from_db_for_year = load_depenses_data_from_db_for_year.__get__(self)
@@ -832,45 +1023,91 @@ class BudgetEditDialog(QDialog):
                 if widget:
                     widget.setParent(None)
 
-            months = get_months_for_year(year)
-            colonnes = []
-            for _, mois in months:
-                colonnes.extend([f"{mois} - Montant", f"{mois} - Détail"])
-
+            # Nouveau tableau simplifié : Montant | Détail | Mois
             table = QTableWidget()
-            table.setRowCount(5)  # 5 lignes par défaut
-            table.setColumnCount(len(colonnes))
-            table.setHorizontalHeaderLabels(colonnes)
+            table.setRowCount(0)  # Commence vide
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["Montant", "Détail", "Mois"])
+            
+            # Largeurs des colonnes
+            table.setColumnWidth(0, 100)  # Montant
+            table.setColumnWidth(1, 300)  # Détail
+            table.setColumnWidth(2, 120)  # Mois
 
-            for col in range(len(colonnes)):
-                if "Montant" in colonnes[col]:
-                    table.setColumnWidth(col, 120)
-                elif "Détail" in colonnes[col]:
-                    table.setColumnWidth(col, 200)
-
-            for row in range(table.rowCount()):
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(row, col, item_mois)
+            def add_row():
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.autres_depenses_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
 
             btn_add_row = QPushButton("Ajouter une ligne")
-            def add_row():
-                table.insertRow(table.rowCount())
-                for col in range(len(colonnes)):
-                    item_mois = QTableWidgetItem("")
-                    item_mois.setFlags(item_mois.flags() | Qt.ItemFlag.ItemIsEditable)
-                    table.setItem(table.rowCount()-1, col, item_mois)
             btn_add_row.clicked.connect(add_row)
+            
+            btn_delete_row = QPushButton("Supprimer la ligne sélectionnée")
+            def delete_row():
+                current_row = table.currentRow()
+                if current_row >= 0:
+                    reply = QMessageBox.question(
+                        self,
+                        "Confirmation de suppression",
+                        "Êtes-vous sûr de vouloir supprimer cette ligne ?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.Yes:
+                        # Suppression visuelle
+                        table.removeRow(current_row)
+                        self.autres_depenses_modified_years.add(year)
+                        
+                        # Sauvegarde immédiate pour synchroniser la base de données
+                        self.save_autres_depenses_table_to_memory(year)
+                        conn = sqlite3.connect('gestion_budget.db')
+                        cursor = conn.cursor()
+                        
+                        # Supprime toutes les autres dépenses de cette année
+                        cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", 
+                                     (self.projet_id, int(year)))
+                        
+                        # Recrée les données à partir du tableau actuel
+                        data = self.autres_depenses_data.get(year, {})
+                        for (ligne_index, mois), (montant, detail) in data.items():
+                            if montant != 0 or detail.strip():
+                                cursor.execute("""
+                                    INSERT OR REPLACE INTO autres_depenses 
+                                    (projet_id, annee, ligne_index, mois, montant, detail) 
+                                    VALUES (?, ?, ?, ?, ?, ?)
+                                """, (self.projet_id, int(year), ligne_index, mois, montant, detail))
+                        
+                        conn.commit()
+                        conn.close()
+            btn_delete_row.clicked.connect(delete_row)
 
             # Charge les données depuis la base de données
-            self.load_autres_depenses_data_from_db_for_year(year, table, colonnes)
+            self.load_autres_depenses_data_from_db_for_year(year, table)
 
+            # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
             double_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
             def on_item_changed(item):
-                col = item.column()
-                if "Montant" in colonnes[col]:
+                if item.column() == 0:  # Colonne Montant
                     value = item.text()
                     state = double_validator.validate(value, 0)[0]
                     if state != QDoubleValidator.State.Acceptable and value != "":
@@ -879,102 +1116,118 @@ class BudgetEditDialog(QDialog):
                 self.autres_depenses_modified_years.add(year)
             table.itemChanged.connect(on_item_changed)
 
+            # Ajout des widgets
+            buttons_layout = QHBoxLayout()
+            buttons_layout.addWidget(btn_add_row)
+            buttons_layout.addWidget(btn_delete_row)
+            buttons_layout.addStretch()
+            
+            buttons_widget = QWidget()
+            buttons_widget.setLayout(buttons_layout)
+            
             self.autres_depenses_layout.addWidget(table)
-            self.autres_depenses_layout.addWidget(btn_add_row)
-            aide_label = QLabel("Remplissez les montants et détails pour chaque autre dépense.")
+            self.autres_depenses_layout.addWidget(buttons_widget)
+            aide_label = QLabel("Saisissez le montant, le détail et sélectionnez le mois pour chaque autre dépense.")
             self.autres_depenses_layout.addWidget(aide_label)
             self.autres_depenses_table = table
-            self.autres_depenses_colonnes = colonnes
 
         def save_autres_depenses_table_to_memory(self, year):
-            if not hasattr(self, 'autres_depenses_table') or not hasattr(self, 'autres_depenses_colonnes'):
+            if not hasattr(self, 'autres_depenses_table'):
                 return
             table = self.autres_depenses_table
-            colonnes = self.autres_depenses_colonnes
             data = {}
             for row in range(table.rowCount()):
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois = col_montant_name.split(" - ")[0]
-                        montant_item = table.item(row, col_index)
-                        detail_item = table.item(row, col_index + 1)
-                        montant = montant_item.text() if montant_item else ""
-                        detail = detail_item.text() if detail_item else ""
-                        try:
-                            montant_val = float(montant) if montant else 0
-                        except Exception:
-                            montant_val = 0
-                        if montant_val != 0 or detail:
-                            key = (row, mois)  # Ajout de l'index de ligne pour distinguer les lignes
-                            data[key] = (montant_val, detail)
-                    col_index += 2
+                # Récupération des valeurs de chaque ligne
+                montant_item = table.item(row, 0)  # Colonne Montant
+                detail_item = table.item(row, 1)   # Colonne Détail
+                mois_combo = table.cellWidget(row, 2)  # Colonne Mois (ComboBox)
+                
+                montant = montant_item.text() if montant_item else ""
+                detail = detail_item.text() if detail_item else ""
+                mois = mois_combo.currentText() if mois_combo else ""
+                
+                # Ne sauvegarde que si au moins un champ est rempli
+                try:
+                    montant_val = float(montant) if montant else 0
+                except Exception:
+                    montant_val = 0
+                    
+                if montant_val != 0 or detail.strip() or mois:
+                    # Utilise le numéro de ligne et le mois pour créer une clé unique
+                    key = (row, mois)
+                    data[key] = (montant_val, detail)
             self.autres_depenses_data[year] = data
             if data:
                 self.autres_depenses_modified_years.add(year)
 
-        def load_autres_depenses_data_from_db_for_year(self, year, table, colonnes):
+        def load_autres_depenses_data_from_db_for_year(self, year, table):
             conn = sqlite3.connect('gestion_budget.db')
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT ligne_index, mois, montant, detail 
                 FROM autres_depenses 
                 WHERE projet_id=? AND annee=?
+                ORDER BY ligne_index
             """, (self.projet_id, int(year)))
             rows = cursor.fetchall()
             conn.close()
+            
             if not rows:
-                return
-            
-            # Met à jour aussi les données en mémoire
-            data = {}
-            for ligne_index, mois, montant, detail in rows:
-                # Ajoute aux données mémoire
-                key = (ligne_index, mois)
-                data[key] = (montant or 0, detail or "")
+                # Ajoute une ligne vide par défaut
+                table.insertRow(0)
                 
-                # Met dans le tableau
-                if ligne_index < table.rowCount():
-                    for col in range(0, len(colonnes), 2):
-                        mois_col = colonnes[col].split(" - ")[0]
-                        if mois_col == mois:
-                            table.blockSignals(True)
-                            table.item(ligne_index, col).setText(str(montant) if montant else "")
-                            table.item(ligne_index, col+1).setText(detail if detail else "")
-                            table.blockSignals(False)
-                            break
-            
-            # Sauvegarde les données en mémoire
-            self.autres_depenses_data[year] = data
+                # Colonne Montant
+                montant_item = QTableWidgetItem("")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem("")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(0, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                mois_combo.currentTextChanged.connect(lambda: self.autres_depenses_modified_years.add(year))
+                table.setCellWidget(0, 2, mois_combo)
+                return
 
-        def restore_autres_depenses_table_from_memory(self, year, table, colonnes):
-            """Restaure les valeurs du tableau autres dépenses à partir de la mémoire pour l'année donnée"""
-            data = self.autres_depenses_data.get(year, {})
-            
-            for row in range(table.rowCount()):
-                col_index = 0
-                while col_index < len(colonnes):
-                    if col_index + 1 < len(colonnes):
-                        col_montant_name = colonnes[col_index]
-                        mois = col_montant_name.split(" - ")[0]
-                        key = (row, mois)
-                        montant, detail = data.get(key, (0, ""))
-                        montant_item = table.item(row, col_index)
-                        detail_item = table.item(row, col_index + 1)
-                        if montant_item and detail_item:
-                            table.blockSignals(True)
-                            if montant != 0:
-                                montant_item.setText(str(montant))
-                            else:
-                                montant_item.setText("")
-                            detail_item.setText(detail)
-                            table.blockSignals(False)
-                    col_index += 2
+            # Charge les données existantes
+            for ligne_index, mois, montant, detail in rows:
+                row = table.rowCount()
+                table.insertRow(row)
+                
+                # Colonne Montant
+                montant_item = QTableWidgetItem(str(montant) if montant else "")
+                montant_item.setFlags(montant_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, montant_item)
+                
+                # Colonne Détail  
+                detail_item = QTableWidgetItem(detail if detail else "")
+                detail_item.setFlags(detail_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, detail_item)
+                
+                # Colonne Mois (ComboBox) - Seulement les mois du projet
+                mois_combo = QComboBox()
+                months = get_months_for_year(year)
+                mois_items = [""]  # Option vide en premier
+                for _, mois_nom in months:
+                    mois_items.append(mois_nom)
+                mois_combo.addItems(mois_items)
+                if mois:
+                    index = mois_combo.findText(mois)
+                    if index >= 0:
+                        mois_combo.setCurrentIndex(index)
+                mois_combo.currentTextChanged.connect(lambda: self.autres_depenses_modified_years.add(year))
+                table.setCellWidget(row, 2, mois_combo)
 
         self.save_autres_depenses_table_to_memory = save_autres_depenses_table_to_memory.__get__(self)
         self.load_autres_depenses_data_from_db_for_year = load_autres_depenses_data_from_db_for_year.__get__(self)
-        self.restore_autres_depenses_table_from_memory = restore_autres_depenses_table_from_memory.__get__(self)
 
         build_autres_depenses_table_for_year(self.annee_combo.currentText())
         self.annee_combo.currentTextChanged.connect(lambda year: build_autres_depenses_table_for_year(year))
@@ -1051,8 +1304,9 @@ class BudgetEditDialog(QDialog):
                     cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
                     for key, (montant, detail) in data.items():
                         if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                            categorie, mois = key
                             cursor.execute("INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
-                                         (self.projet_id, int(annee), *key, montant or 0, detail or ""))
+                                         (self.projet_id, int(annee), categorie, mois, montant or 0, detail or ""))
 
             # Sauvegarde seulement les années modifiées pour les autres dépenses
             for annee in self.autres_depenses_modified_years:
@@ -1061,8 +1315,9 @@ class BudgetEditDialog(QDialog):
                     cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
                     for key, (montant, detail) in data.items():
                         if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
+                            ligne_index, mois = key
                             cursor.execute("INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
-                                         (self.projet_id, int(annee), *key, montant or 0, detail or ""))
+                                         (self.projet_id, int(annee), ligne_index, mois, montant or 0, detail or ""))
 
             conn.commit()
             conn.close()
