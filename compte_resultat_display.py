@@ -514,11 +514,17 @@ class CompteResultatDisplay(QDialog):
         # 7. CRÉDIT D'IMPÔT RECHERCHE (CIR) - Calculé sur l'ensemble du projet puis réparti
         try:
             data['credit_impot'] = 0
+            data['credit_impot_note'] = ""
             
             if self.has_cir_projects:
                 # Calculer le CIR total du projet et le répartir par année
-                cir_annuel = self.calculate_distributed_cir(cursor, year, month)
-                data['credit_impot'] = cir_annuel
+                cir_result = self.calculate_distributed_cir(cursor, year, month)
+                
+                if cir_result == "CIR_NON_APPLICABLE":
+                    data['credit_impot'] = 0
+                    data['credit_impot_note'] = "CIR non applicable (subventions > dépenses éligibles)"
+                else:
+                    data['credit_impot'] = cir_result
                 
         except sqlite3.OperationalError as e:
             # Erreur avec les tables - message d'alerte mais continuer
@@ -527,6 +533,9 @@ class CompteResultatDisplay(QDialog):
                                   f"Erreur lors du calcul du CIR : {str(e)}\n"
                                   f"Le calcul du CIR sera ignoré.")
                 self._cir_error_shown = True
+            data['credit_impot'] = 0
+        except Exception as e:
+            print(f"DEBUG CIR: Erreur générale = {str(e)}")
             data['credit_impot'] = 0
         
         return data
@@ -605,6 +614,11 @@ class CompteResultatDisplay(QDialog):
         - Il est ensuite réparti proportionnellement aux dépenses éligibles (temps de travail * k1 + amortissements * k2) 
           de la période demandée (mois ou année)
         - Cela permet une répartition mensuelle cohérente basée sur l'activité réelle de chaque période
+        
+        Retourne:
+        - Un nombre négatif si CIR applicable (diminue les charges)
+        - 0 si pas de CIR
+        - "CIR_NON_APPLICABLE" si subventions > dépenses éligibles
         """
         try:
             # Récupérer les projets CIR
@@ -641,9 +655,7 @@ class CompteResultatDisplay(QDialog):
                 """
                 cursor.execute(query, cir_project_ids)
                 year_montant_charge = cursor.fetchone()[0] or 0
-                total_montant_charge += year_montant_charge
-                
-                # Amortissements pour cette année
+                total_montant_charge += year_montant_charge                # Amortissements pour cette année
                 year_amort = 0
                 for project_id in cir_project_ids:
                     amort = self.calculate_amortissement_for_period(cursor, project_id, year)
@@ -685,11 +697,17 @@ class CompteResultatDisplay(QDialog):
             montant_net_eligible_total = montant_eligible_total - total_subventions
             cir_total = montant_net_eligible_total * k3
             
-            # 4. Calculer le total des coûts éligibles sur tout le projet (pour la proportion)
+            # 4. Vérifier si le CIR est applicable
+            if montant_net_eligible_total <= 0:
+                # Subventions dépassent les dépenses éligibles
+                return "CIR_NON_APPLICABLE"
+            
+            # 5. Calculer le total des coûts éligibles sur tout le projet (pour la proportion)
             total_eligible_costs = (total_montant_charge * k1) + (total_amortissements * k2)
             
-            # 5. Répartir proportionnellement aux dépenses éligibles de la période
+            # 6. Répartir proportionnellement aux dépenses éligibles de la période
             if total_eligible_costs > 0:
+                
                 # Appliquer les coefficients k1 et k2 aux coûts de la période cible
                 # target_period_eligible_costs contient déjà montant_charge + amortissements
                 # Il faut séparer pour appliquer les bons coefficients
@@ -738,12 +756,8 @@ class CompteResultatDisplay(QDialog):
                 
                 # Le crédit d'impôt est négatif (diminue les charges)
                 # Si le CIR calculé est positif, on le rend négatif pour diminuer les charges
-                # Si le CIR calculé est négatif (cas où subventions > montant éligible), on retourne 0
                 if cir_reparti > 0:
                     result = -abs(cir_reparti)
-                elif cir_reparti < 0:
-                    # Dans ce cas, les subventions dépassent le montant éligible, pas de CIR
-                    result = 0
                 else:
                     result = 0
                     
@@ -846,6 +860,13 @@ class CompteResultatDisplay(QDialog):
                     elif data_key == "cout_moyen_par_jour":
                         # Afficher le coût moyen par jour avec 2 décimales et €/jour
                         item = QTableWidgetItem(f"{self.format_currency(value)} €/jour" if value != 0 else "")
+                    elif data_key == "credit_impot":
+                        # Formatage spécial pour le CIR avec gestion de la note explicative
+                        note = data[period].get('credit_impot_note', "")
+                        if note:
+                            item = QTableWidgetItem(note)
+                        else:
+                            item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
                     else:
                         # Formatage normal pour les autres données
                         item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
