@@ -785,18 +785,16 @@ class CompteResultatDisplay(QDialog):
             (self.get_cost_type_label(), "cout_direct"),  # Nom dynamique selon le type de coût
             ("  → Nombre de jours TOTAL", "nb_jours_total"),
             ("  → Coût moyen par jour", "cout_moyen_par_jour"),
-            ("CHARGES EXCEPTIONNELLES", "header"),
+            ("TOTAL CHARGES", "total_charges"),
+            ("", "separator"),
         ]
         
         # Ajouter la ligne CIR seulement si au moins un projet a le CIR activé
         if self.has_cir_projects:
             structure.append(("Crédit d'impôt", "credit_impot"))
+            structure.append(("", "separator"))
         
-        structure.extend([
-            ("TOTAL CHARGES", "total_charges"),
-            ("", "separator"),
-            ("RÉSULTAT FINANCIER", "resultat_financier")
-        ])
+        structure.append(("RÉSULTAT FINANCIER", "resultat_financier"))
         
         self.table.setRowCount(len(structure))
         
@@ -916,20 +914,24 @@ class CompteResultatDisplay(QDialog):
         if total_type == "total_produits":
             return period_data.get('recettes', 0) + period_data.get('subventions', 0)
         elif total_type == "total_charges":
+            # TOTAL CHARGES = uniquement les vraies charges, sans le CIR
             total_charges = (period_data.get('achats_sous_traitance', 0) + 
                            period_data.get('autres_achats', 0) + 
                            period_data.get('cout_direct', 0) + 
                            period_data.get('dotation_amortissements', 0))
             
-            # Ajouter le crédit d'impôt seulement si au moins un projet a le CIR activé
-            if self.has_cir_projects:
-                total_charges += period_data.get('credit_impot', 0)
-                
+            # Ne pas inclure le CIR dans le total des charges
             return total_charges
         elif total_type == "resultat_financier":
             total_produits = self.calculate_total(period_data, "total_produits")
             total_charges = self.calculate_total(period_data, "total_charges")
-            return total_produits - total_charges
+            
+            # Pour le résultat, on soustrait le CIR séparément
+            resultat = total_produits - total_charges
+            if self.has_cir_projects:
+                resultat += period_data.get('credit_impot', 0)  # CIR est négatif, donc on l'ajoute
+            
+            return resultat
         
         return 0
     
