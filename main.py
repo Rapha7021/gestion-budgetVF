@@ -1426,6 +1426,14 @@ class ProjectForm(QDialog):
             ))
             projet_id = cursor.lastrowid
             
+            # Sauvegarde des thèmes liés pour le nouveau projet
+            for nom in self.selected_themes:
+                cursor.execute('SELECT id FROM themes WHERE nom=?', (nom,))
+                res = cursor.fetchone()
+                if res:
+                    theme_id = res[0]
+                    cursor.execute('INSERT INTO projet_themes (projet_id, theme_id) VALUES (?, ?)', (projet_id, theme_id))
+            
         # Sauvegarde des investissements
         cursor.execute('DELETE FROM investissements WHERE projet_id=?', (projet_id,))
         for i in range(self.invest_list.count()):
