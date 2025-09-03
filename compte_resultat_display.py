@@ -1283,10 +1283,12 @@ class CompteResultatDisplay(QDialog):
                 table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
                 th, td {{ border: 1px solid #bdc3c7; padding: 8px; text-align: left; }}
                 th {{ background-color: {settings.header_color}; color: white; font-weight: bold; }}
+                th.total-header {{ background-color: {settings.header_color}; color: white; font-weight: bold; border: 1px solid #bdc3c7; }}
                 .header {{ background-color: {settings.header_color}; color: white; font-weight: bold; }}
                 .total {{ background-color: {settings.total_color}; color: white; font-weight: bold; }}
                 .result {{ background-color: {settings.result_color}; color: white; font-weight: bold; }}
                 .amount {{ text-align: right; }}
+                .total-column {{ font-weight: bold; text-align: right; }}
                 .logo-container {{ overflow: auto; margin-bottom: 20px; }}
             </style>
         </head>
@@ -1302,7 +1304,12 @@ class CompteResultatDisplay(QDialog):
         html += "<tr>"
         for col in range(self.table.columnCount()):
             header_item = self.table.horizontalHeaderItem(col)
-            html += f"<th>{header_item.text() if header_item else ''}</th>"
+            header_text = header_item.text() if header_item else ""
+            # Utiliser une classe CSS pour l'en-tête de la colonne TOTAL
+            if header_text == "TOTAL":
+                html += f"<th class='total-header'>{header_text}</th>"
+            else:
+                html += f"<th>{header_text}</th>"
         html += "</tr>"
         
         # Données
@@ -1311,6 +1318,10 @@ class CompteResultatDisplay(QDialog):
             for col in range(self.table.columnCount()):
                 item = self.table.item(row, col)
                 value = item.text() if item else ""
+                
+                # Vérifier si on est dans la colonne TOTAL
+                header_item = self.table.horizontalHeaderItem(col)
+                is_total_column = header_item and header_item.text() == "TOTAL"
                 
                 # Déterminer la classe CSS selon le contenu de la première colonne
                 css_class = ""
@@ -1332,9 +1343,10 @@ class CompteResultatDisplay(QDialog):
                         elif "RÉSULTAT" in first_col_text:
                             css_class = "result"
                         else:
-                            css_class = "amount"
+                            # Si c'est la colonne TOTAL, utiliser la classe spéciale
+                            css_class = "total-column" if is_total_column else "amount"
                     else:
-                        css_class = "amount"
+                        css_class = "total-column" if is_total_column else "amount"
                 
                 html += f'<td class="{css_class}">{value}</td>'
             html += "</tr>"
