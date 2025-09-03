@@ -14,6 +14,15 @@ class SubventionDialog(QDialog):
         self.nom_edit = QLineEdit()
         self.nom_edit.setPlaceholderText('Ex: ADEME, Région, Europe...')
         layout.addRow('Nom de la subvention:', self.nom_edit)
+        
+        # Case à cocher pour basculer en mode simplifié
+        self.mode_simplifie_cb = QCheckBox('Mode simplifié (montant forfaitaire)')
+        layout.addRow(self.mode_simplifie_cb)
+        
+        # Container pour les éléments du mode détaillé (masquables)
+        self.mode_detaille_widget = QFrame()
+        mode_detaille_layout = QFormLayout()
+        
         # Dépenses éligibles
         self.cb_temps = QCheckBox('Temps de travail')
         self.spin_temps = QDoubleSpinBox()
@@ -27,7 +36,7 @@ class SubventionDialog(QDialog):
         h_temps.addStretch()
         h_temps.addWidget(QLabel('Coef:'))
         h_temps.addWidget(self.spin_temps)
-        layout.addRow(h_temps)
+        mode_detaille_layout.addRow(h_temps)
         self.cb_externes = QCheckBox('Dépenses externes')
         self.spin_externes = QDoubleSpinBox()
         self.spin_externes.setValue(1)
@@ -39,7 +48,7 @@ class SubventionDialog(QDialog):
         h_externes.addStretch()
         h_externes.addWidget(QLabel('Coef:'))
         h_externes.addWidget(self.spin_externes)
-        layout.addRow(h_externes)
+        mode_detaille_layout.addRow(h_externes)
         self.cb_autres = QCheckBox('Autres dépenses')
         self.spin_autres = QDoubleSpinBox()
         self.spin_autres.setValue(1)
@@ -51,7 +60,7 @@ class SubventionDialog(QDialog):
         h_autres.addStretch()
         h_autres.addWidget(QLabel('Coef:'))
         h_autres.addWidget(self.spin_autres)
-        layout.addRow(h_autres)
+        mode_detaille_layout.addRow(h_autres)
         self.cb_dotation = QCheckBox('Dotation amortissements')
         self.spin_dotation = QDoubleSpinBox()
         self.spin_dotation.setValue(1)
@@ -63,20 +72,43 @@ class SubventionDialog(QDialog):
         h_dotation.addStretch()
         h_dotation.addWidget(QLabel('Coef:'))
         h_dotation.addWidget(self.spin_dotation)
-        layout.addRow(h_dotation)
+        mode_detaille_layout.addRow(h_dotation)
         # Cd et taux - avec QDoubleSpinBox
         self.cd_spin = QDoubleSpinBox()
         self.cd_spin.setValue(1)
         self.cd_spin.setDecimals(2)
         self.cd_spin.setRange(1, 2)  # Coefficient entre 1 et 2
         self.cd_spin.setSingleStep(0.01)  # Pas de 0.01
-        layout.addRow('Coef de charge :', self.cd_spin)
+        mode_detaille_layout.addRow('Coef de charge :', self.cd_spin)
         self.taux_spin = QDoubleSpinBox()
         self.taux_spin.setValue(round(100, 2))  # Valeur par défaut arrondie à 2 décimales
         self.taux_spin.setDecimals(2)
         self.taux_spin.setRange(0, 100)
         self.taux_spin.setSuffix('%')
-        layout.addRow('Taux de subvention:', self.taux_spin)
+        mode_detaille_layout.addRow('Taux de subvention:', self.taux_spin)
+        
+        self.mode_detaille_widget.setLayout(mode_detaille_layout)
+        layout.addRow(self.mode_detaille_widget)
+        
+        # Container pour le mode simplifié (masqué par défaut)
+        self.mode_simplifie_widget = QFrame()
+        mode_simplifie_layout = QFormLayout()
+        
+        self.montant_forfaitaire_spin = QDoubleSpinBox()
+        self.montant_forfaitaire_spin.setDecimals(2)
+        self.montant_forfaitaire_spin.setRange(0, 1_000_000_000)
+        self.montant_forfaitaire_spin.setSingleStep(100)
+        self.montant_forfaitaire_spin.setValue(0)
+        mode_simplifie_layout.addRow('Montant forfaitaire (€):', self.montant_forfaitaire_spin)
+        
+        # Affichage du taux calculé automatiquement
+        self.taux_calcule_label = QLabel("0.00%")
+        self.taux_calcule_label.setStyleSheet("font-weight: bold; font-size: 12px; color: orange;")
+        mode_simplifie_layout.addRow('Taux de subvention calculé:', self.taux_calcule_label)
+        
+        self.mode_simplifie_widget.setLayout(mode_simplifie_layout)
+        self.mode_simplifie_widget.setVisible(False)  # Masqué par défaut
+        layout.addRow(self.mode_simplifie_widget)
         
         # Section pour afficher le montant estimé de la subvention
         separator = QFrame()
@@ -93,7 +125,9 @@ class SubventionDialog(QDialog):
 
         self.montant_label = QLabel("0 €")
         self.montant_label.setStyleSheet("font-weight: bold; font-size: 14px; color: green;")
-        montant_layout.addWidget(QLabel("Montant estimé de la subvention:"))
+        # Label dynamique selon le mode
+        self.montant_titre_label = QLabel("Montant estimé de la subvention:")
+        montant_layout.addWidget(self.montant_titre_label)
         montant_layout.addWidget(self.montant_label)
 
         layout.addRow(montant_layout)
@@ -140,6 +174,10 @@ class SubventionDialog(QDialog):
         self.spin_dotation.valueChanged.connect(self.update_montant)
         self.cd_spin.valueChanged.connect(self.update_montant)
         self.taux_spin.valueChanged.connect(self.update_montant)
+        self.montant_forfaitaire_spin.valueChanged.connect(self.update_montant)
+        
+        # Connecter le changement de mode
+        self.mode_simplifie_cb.stateChanged.connect(self.toggle_mode)
         
         # Mettre à jour l'assiette éligible lors des changements
         self.cb_temps.stateChanged.connect(self.update_assiette)
@@ -151,7 +189,13 @@ class SubventionDialog(QDialog):
         self.cb_dotation.stateChanged.connect(self.update_assiette)
         self.spin_dotation.valueChanged.connect(self.update_assiette)
         self.cd_spin.valueChanged.connect(self.update_assiette)
+        
+        # Mettre à jour le taux calculé quand le montant forfaitaire change
+        self.montant_forfaitaire_spin.valueChanged.connect(self.update_taux_calcule)
 
+        # Flag pour éviter les confirmations lors du chargement des données
+        self.loading_data = False
+        
         # Charger les données si modification
         if data:
             self.load_data(data)
@@ -179,6 +223,78 @@ class SubventionDialog(QDialog):
             if row_label and row_label.widget() and row_label.widget().text() == 'Coef de charge :':
                 row_label.widget().setToolTip("Ce coefficient traduit le volume de charges directes assignées à la catégorie 'temps de travail'.")
                 break
+
+    def toggle_mode(self):
+        """Bascule entre le mode détaillé et le mode simplifié avec confirmation"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Si on est en train de charger des données, pas de confirmation
+        if self.loading_data:
+            # Appliquer directement le changement
+            mode_simplifie_demande = self.mode_simplifie_cb.isChecked()
+            
+            if mode_simplifie_demande:
+                self.mode_detaille_widget.setVisible(False)
+                self.mode_simplifie_widget.setVisible(True)
+                self.montant_titre_label.setText("Montant forfaitaire de la subvention:")
+            else:
+                self.mode_detaille_widget.setVisible(True)
+                self.mode_simplifie_widget.setVisible(False)
+                self.montant_titre_label.setText("Montant estimé de la subvention:")
+            
+            # Mettre à jour l'affichage
+            self.update_montant()
+            self.update_assiette()
+            return
+        
+        # Déterminer le mode actuel et le mode cible
+        mode_simplifie_demande = self.mode_simplifie_cb.isChecked()
+        
+        if mode_simplifie_demande:
+            # Passage en mode simplifié
+            message = ("Vous allez basculer en mode simplifié.\n\n"
+                      "Les paramètres détaillés (coefficients, critères) seront masqués "
+                      "mais conservés.\n\n"
+                      "Voulez-vous continuer ?")
+            titre = "Basculer en mode simplifié"
+        else:
+            # Passage en mode détaillé
+            message = ("Vous allez basculer en mode détaillé.\n\n"
+                      "Le montant forfaitaire sera masqué mais conservé.\n\n"
+                      "Voulez-vous continuer ?")
+            titre = "Basculer en mode détaillé"
+        
+        # Afficher la boîte de confirmation
+        confirmation = QMessageBox.question(
+            self, 
+            titre, 
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No  # Non par défaut pour éviter les accidents
+        )
+        
+        if confirmation == QMessageBox.StandardButton.No:
+            # L'utilisateur a annulé, remettre la case dans l'état précédent
+            self.mode_simplifie_cb.blockSignals(True)  # Éviter la récursion
+            self.mode_simplifie_cb.setChecked(not mode_simplifie_demande)
+            self.mode_simplifie_cb.blockSignals(False)
+            return
+        
+        # L'utilisateur a confirmé, procéder au changement
+        if mode_simplifie_demande:
+            # Mode simplifié activé
+            self.mode_detaille_widget.setVisible(False)
+            self.mode_simplifie_widget.setVisible(True)
+            self.montant_titre_label.setText("Montant forfaitaire de la subvention:")
+        else:
+            # Mode détaillé activé
+            self.mode_detaille_widget.setVisible(True)
+            self.mode_simplifie_widget.setVisible(False)
+            self.montant_titre_label.setText("Montant estimé de la subvention:")
+        
+        # Mettre à jour l'affichage
+        self.update_montant()
+        self.update_assiette()
 
     def get_project_data(self):
         """Récupère les données du projet pour calculer le montant de la subvention"""
@@ -341,6 +457,17 @@ class SubventionDialog(QDialog):
         
     def update_montant(self):
         """Calcule et met à jour le montant estimé de la subvention"""
+        if self.mode_simplifie_cb.isChecked():
+            # Mode simplifié : utiliser le montant forfaitaire
+            montant = self.montant_forfaitaire_spin.value()
+            self.montant_label.setText(format_montant(montant))
+            self.montant_label.setToolTip("Montant forfaitaire saisi manuellement")
+            
+            # Calculer le taux automatiquement
+            self.update_taux_calcule()
+            return
+        
+        # Mode détaillé : calcul avec les coefficients
         # [coef temps de travail x (temps_travail_total x Cd) +
         #  coef dépenses externes x (dépenses externes) +
         #  coef autres achats x (autres dépenses)+
@@ -409,22 +536,61 @@ class SubventionDialog(QDialog):
         # Ajouter une infobulle pour voir le détail du calcul
         self.montant_label.setToolTip(detail_text)
         
+    def update_taux_calcule(self):
+        """Calcule et affiche le taux de subvention en mode simplifié"""
+        if not self.mode_simplifie_cb.isChecked():
+            return
+            
+        # Récupérer les données du projet
+        projet_data = self.get_project_data()
+        
+        # Calculer l'assiette totale
+        assiette_totale = (projet_data['temps_travail_total'] + 
+                          projet_data['depenses_externes'] + 
+                          projet_data['autres_achats'] + 
+                          projet_data['amortissements'])
+        
+        montant_forfaitaire = self.montant_forfaitaire_spin.value()
+        
+        # Calculer le taux : (Montant forfaitaire / Assiette éligible) × 100
+        if assiette_totale > 0:
+            taux_calcule = (montant_forfaitaire / assiette_totale) * 100
+            self.taux_calcule_label.setText(f"{taux_calcule:.2f}%")
+            
+            # Infobulle avec le détail du calcul
+            detail_calcul = f"Calcul: {format_montant(montant_forfaitaire)} ÷ {format_montant(assiette_totale)} × 100 = {taux_calcule:.2f}%"
+            self.taux_calcule_label.setToolTip(detail_calcul)
+        else:
+            self.taux_calcule_label.setText("0.00%")
+            self.taux_calcule_label.setToolTip("Aucune assiette éligible disponible")
+        
     def update_assiette(self):
-        """Met à jour l'assiette éligible sans multiplier par le taux de subvention."""
+        """Met à jour l'assiette éligible selon le mode."""
         # Récupérer les données du projet une seule fois pour optimiser
         projet_data = self.get_project_data()
         
-        assiette = 0
-        if self.cb_temps.isChecked():
-            # Appliquer le coefficient de charge au temps de travail, comme dans update_montant()
-            temps_travail_avec_cd = projet_data['temps_travail_total'] * self.cd_spin.value()
-            assiette += self.spin_temps.value() * temps_travail_avec_cd
-        if self.cb_externes.isChecked():
-            assiette += self.spin_externes.value() * projet_data['depenses_externes']
-        if self.cb_autres.isChecked():
-            assiette += self.spin_autres.value() * projet_data['autres_achats']
-        if self.cb_dotation.isChecked():
-            assiette += self.spin_dotation.value() * projet_data['amortissements']
+        if self.mode_simplifie_cb.isChecked():
+            # Mode simplifié : Assiette éligible max = total des dépenses + valorisation salaires chargés
+            assiette = (projet_data['temps_travail_total'] + 
+                       projet_data['depenses_externes'] + 
+                       projet_data['autres_achats'] + 
+                       projet_data['amortissements'])
+            # Mettre à jour aussi le taux calculé
+            self.update_taux_calcule()
+        else:
+            # Mode détaillé : calcul avec les coefficients comme avant
+            assiette = 0
+            if self.cb_temps.isChecked():
+                # Appliquer le coefficient de charge au temps de travail, comme dans update_montant()
+                temps_travail_avec_cd = projet_data['temps_travail_total'] * self.cd_spin.value()
+                assiette += self.spin_temps.value() * temps_travail_avec_cd
+            if self.cb_externes.isChecked():
+                assiette += self.spin_externes.value() * projet_data['depenses_externes']
+            if self.cb_autres.isChecked():
+                assiette += self.spin_autres.value() * projet_data['autres_achats']
+            if self.cb_dotation.isChecked():
+                assiette += self.spin_dotation.value() * projet_data['amortissements']
+        
         self.assiette_label.setText(format_montant(assiette))
         
     def validate_and_accept(self):
@@ -434,18 +600,27 @@ class SubventionDialog(QDialog):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, 'Erreur', "Le nom de la subvention est obligatoire.")
             return
-            
-        # Vérifier qu'au moins un critère est coché
-        if not (self.cb_temps.isChecked() or self.cb_externes.isChecked() or 
-                self.cb_autres.isChecked() or self.cb_dotation.isChecked()):
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, 'Erreur', "Veuillez sélectionner au moins un critère pour la subvention.")
-            return
-            
+        
+        if self.mode_simplifie_cb.isChecked():
+            # Mode simplifié : vérifier que le montant forfaitaire est > 0
+            if self.montant_forfaitaire_spin.value() <= 0:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, 'Erreur', "Veuillez saisir un montant forfaitaire supérieur à 0.")
+                return
+        else:
+            # Mode détaillé : vérifier qu'au moins un critère est coché
+            if not (self.cb_temps.isChecked() or self.cb_externes.isChecked() or 
+                    self.cb_autres.isChecked() or self.cb_dotation.isChecked()):
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, 'Erreur', "Veuillez sélectionner au moins un critère pour la subvention.")
+                return
+                
         self.accept()
     def get_data(self):
         return {
             'nom': self.nom_edit.text().strip(),
+            'mode_simplifie': int(self.mode_simplifie_cb.isChecked()),
+            'montant_forfaitaire': float(self.montant_forfaitaire_spin.value()),
             'depenses_temps_travail': int(self.cb_temps.isChecked()),
             'coef_temps_travail': float(self.spin_temps.value()),
             'depenses_externes': int(self.cb_externes.isChecked()),
@@ -460,7 +635,12 @@ class SubventionDialog(QDialog):
             'montant_subvention_max': float(self.subvention_max_spin.value())
         }
     def load_data(self, data):
+        # Activer le flag pour éviter les confirmations lors du chargement
+        self.loading_data = True
+        
         self.nom_edit.setText(data.get('nom', ''))
+        self.mode_simplifie_cb.setChecked(bool(data.get('mode_simplifie', 0)))
+        self.montant_forfaitaire_spin.setValue(float(data.get('montant_forfaitaire', 0)))
         self.cb_temps.setChecked(bool(data.get('depenses_temps_travail', 0)))
         self.spin_temps.setValue(float(data.get('coef_temps_travail', 1)))
         self.cb_externes.setChecked(bool(data.get('depenses_externes', 0)))
@@ -473,3 +653,9 @@ class SubventionDialog(QDialog):
         self.taux_spin.setValue(round(float(data.get('taux', 100)), 2))  # Arrondi explicite
         self.depenses_max_spin.setValue(float(data.get('depenses_eligibles_max', 0)))
         self.subvention_max_spin.setValue(float(data.get('montant_subvention_max', 0)))
+        
+        # Mettre à jour l'affichage des widgets après le chargement
+        self.toggle_mode()
+        
+        # Désactiver le flag après le chargement
+        self.loading_data = False

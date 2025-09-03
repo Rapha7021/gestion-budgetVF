@@ -90,6 +90,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
         nom TEXT,
+        mode_simplifie INTEGER DEFAULT 0,
+        montant_forfaitaire REAL DEFAULT 0,
         depenses_temps_travail INTEGER,
         coef_temps_travail REAL,
         depenses_externes INTEGER,
@@ -113,6 +115,17 @@ def init_db():
     
     try:
         cursor.execute('ALTER TABLE subventions ADD COLUMN montant_subvention_max REAL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    # Migration pour les nouveaux champs du mode simplifié
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN mode_simplifie INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_forfaitaire REAL DEFAULT 0')
     except sqlite3.OperationalError:
         pass  # La colonne existe déjà
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
@@ -1038,6 +1051,167 @@ class ProjectForm(QDialog):
             invest_str = f"Nom: {nom}, Montant: {montant} €, Date achat: {date_achat}, Durée amort.: {duree} ans"
             self.invest_list.addItem(invest_str)
 
+    def calculer_taux_subvention_simplifie(self, data_subvention):
+        """Calcule le taux de subvention pour le mode simplifié"""
+        if not self.projet_id:
+            return 0
+            
+        # Utiliser la même logique que dans subvention_dialog.py pour calculer l'assiette
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        assiette_data = {
+            'temps_travail_total': 0,
+            'depenses_externes': 0,
+            'autres_achats': 0,
+            'amortissements': 0
+        }
+        
+        # 1. Récupérer dates de début et fin du projet
+        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+        date_row = cursor.fetchone()
+        if not date_row or not date_row[0] or not date_row[1]:
+            conn.close()
+            return 0
+        
+        import datetime
+        
+        # Convertir les dates MM/yyyy en objets datetime
+        try:
+            debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+        except ValueError:
+            conn.close()
+            return 0
+        
+        # 2. Calculer le temps de travail et le montant chargé
+        cursor.execute("""
+            SELECT tt.annee, tt.categorie, tt.mois, tt.jours 
+            FROM temps_travail tt 
+            WHERE tt.projet_id = ?
+        """, (self.projet_id,))
+        
+        temps_travail_rows = cursor.fetchall()
+        cout_total_temps = 0
+        
+        for annee, categorie, mois, jours in temps_travail_rows:
+            # Convertir la catégorie du temps de travail au format de categorie_cout
+            categorie_code = ""
+            if "Stagiaire" in categorie:
+                categorie_code = "STP"
+            elif "Assistante" in categorie or "opérateur" in categorie:
+                categorie_code = "AOP"
+            elif "Technicien" in categorie:
+                categorie_code = "TEP"
+            elif "Junior" in categorie:
+                categorie_code = "IJP"
+            elif "Senior" in categorie:
+                categorie_code = "ISP"
+            elif "Expert" in categorie:
+                categorie_code = "EDP"
+            elif "moyen" in categorie:
+                categorie_code = "MOY"
+            
+            if not categorie_code:
+                continue
+                
+            # Récupérer le montant chargé pour cette catégorie et cette année
+            cursor.execute("""
+                SELECT montant_charge 
+                FROM categorie_cout 
+                WHERE categorie = ? AND annee = ?
+            """, (categorie_code, annee))
+            
+            cout_row = cursor.fetchone()
+            if cout_row and cout_row[0]:
+                montant_charge = float(cout_row[0])
+                cout_total_temps += jours * montant_charge
+            else:
+                cout_total_temps += jours * 500  # 500€ par jour par défaut
+        
+        assiette_data['temps_travail_total'] = cout_total_temps
+        
+        # 3. Récupérer toutes les dépenses externes
+        cursor.execute("""
+            SELECT SUM(montant) 
+            FROM depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        depenses_row = cursor.fetchone()
+        if depenses_row and depenses_row[0]:
+            assiette_data['depenses_externes'] = float(depenses_row[0])
+        
+        # 4. Récupérer toutes les autres dépenses
+        cursor.execute("""
+            SELECT SUM(montant) 
+            FROM autres_depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        autres_depenses_row = cursor.fetchone()
+        if autres_depenses_row and autres_depenses_row[0]:
+            assiette_data['autres_achats'] = float(autres_depenses_row[0])
+        
+        # 5. Calculer les dotations aux amortissements
+        cursor.execute("""
+            SELECT montant, date_achat, duree 
+            FROM investissements 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        
+        amortissements_total = 0
+        
+        for montant, date_achat, duree in cursor.fetchall():
+            try:
+                # Convertir la date d'achat en datetime
+                achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
+                
+                # La dotation commence le mois suivant l'achat
+                debut_amort = achat_date.replace(day=1)
+                debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
+                debut_amort = debut_amort.replace(day=1)
+                
+                # La fin de l'amortissement est soit la fin du projet, soit la fin de la période d'amortissement
+                fin_amort = achat_date.replace(day=1)
+                fin_amort = datetime.datetime(fin_amort.year + int(duree), fin_amort.month, 1)
+                
+                # Prendre la date la plus proche entre fin du projet et fin d'amortissement
+                fin_effective = min(fin_projet, fin_amort)
+                
+                # Si le début d'amortissement est après la fin du projet, pas d'amortissement
+                if debut_amort > fin_projet:
+                    continue
+                    
+                # Calculer le nombre de mois d'amortissement effectif
+                mois_amort = (fin_effective.year - debut_amort.year) * 12 + fin_effective.month - debut_amort.month + 1
+                
+                # Calculer la dotation mensuelle (montant / durée en mois)
+                dotation_mensuelle = float(montant) / (int(duree) * 12)
+                
+                # Ajouter au total des amortissements
+                amortissements_total += dotation_mensuelle * mois_amort
+            except Exception:
+                continue
+        
+        assiette_data['amortissements'] = amortissements_total
+        
+        conn.close()
+        
+        # Calculer l'assiette totale
+        assiette_totale = (assiette_data['temps_travail_total'] + 
+                          assiette_data['depenses_externes'] + 
+                          assiette_data['autres_achats'] + 
+                          assiette_data['amortissements'])
+        
+        montant_forfaitaire = data_subvention.get('montant_forfaitaire', 0)
+        
+        # Calculer le taux : (Montant forfaitaire / Assiette éligible) × 100
+        if assiette_totale > 0:
+            return (montant_forfaitaire / assiette_totale) * 100
+        else:
+            return 0
+
     def add_subvention(self):
         from subvention_dialog import SubventionDialog
         dialog = SubventionDialog(self)
@@ -1052,12 +1226,13 @@ class ProjectForm(QDialog):
                 cursor = conn.cursor()
                 try:
                     cursor.execute('''INSERT INTO subventions 
-                        (projet_id, nom, depenses_temps_travail, coef_temps_travail, 
+                        (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                          depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
                          depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
                          depenses_eligibles_max, montant_subvention_max) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                        (self.projet_id, data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (self.projet_id, data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
+                         data['depenses_temps_travail'], data['coef_temps_travail'],
                          data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                          data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
                          data['depenses_eligibles_max'], data['montant_subvention_max']))
@@ -1076,12 +1251,22 @@ class ProjectForm(QDialog):
             
             # Ajouter aux données temporaires dans tous les cas
             self.subventions_data.append(data)
-            cats = []
-            if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
-            if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
-            if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
-            if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
-            subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            
+            # Affichage différent selon le mode
+            if data.get('mode_simplifie', 0):
+                # Mode simplifié : Nom - Taux de subvention : X%
+                # Calculer le taux de subvention (montant forfaitaire / assiette éligible * 100)
+                taux_calcule = self.calculer_taux_subvention_simplifie(data)
+                subv_str = f"{data['nom']} - Taux de subvention : {taux_calcule:.0f}%"
+            else:
+                # Mode détaillé : format existant
+                cats = []
+                if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
+                if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
+                if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
+                if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
+                subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            
             self.subv_list.addItem(subv_str)
 
     def subv_context_menu(self, pos):
@@ -1144,12 +1329,13 @@ class ProjectForm(QDialog):
                     subv_id = subv_ids[row]
                     try:
                         cursor.execute('''UPDATE subventions SET 
-                            nom=?, depenses_temps_travail=?, coef_temps_travail=?, 
+                            nom=?, mode_simplifie=?, montant_forfaitaire=?, depenses_temps_travail=?, coef_temps_travail=?, 
                             depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
                             depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
                             depenses_eligibles_max=?, montant_subvention_max=? 
                             WHERE id=?''',
-                            (data['nom'], data['depenses_temps_travail'], data['coef_temps_travail'],
+                            (data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
+                             data['depenses_temps_travail'], data['coef_temps_travail'],
                              data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                              data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
                              data['depenses_eligibles_max'], data['montant_subvention_max'], subv_id))
@@ -1168,12 +1354,21 @@ class ProjectForm(QDialog):
             
             # Mettre à jour les données temporaires
             self.subventions_data[row] = data
-            cats = []
-            if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
-            if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
-            if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
-            if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
-            subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            
+            # Affichage différent selon le mode
+            if data.get('mode_simplifie', 0):
+                # Mode simplifié : Nom - Taux de subvention : X%
+                taux_calcule = self.calculer_taux_subvention_simplifie(data)
+                subv_str = f"{data['nom']} - Taux de subvention : {taux_calcule:.0f}%"
+            else:
+                # Mode détaillé : format existant
+                cats = []
+                if data['depenses_temps_travail']: cats.append(f"Temps travail (coef {data['coef_temps_travail']})")
+                if data['depenses_externes']: cats.append(f"Externes (coef {data['coef_externes']})")
+                if data['depenses_autres_achats']: cats.append(f"Autres achats (coef {data['coef_autres_achats']})")
+                if data['depenses_dotation_amortissements']: cats.append(f"Dotation (coef {data['coef_dotation_amortissements']})")
+                subv_str = f"{data['nom']} | {', '.join(cats)} | Cd: {data['cd']} | Taux: {data['taux']}%"
+            
             item.setText(subv_str)
 
     def save_project(self):
@@ -1345,7 +1540,7 @@ class ProjectForm(QDialog):
         
         # Essayer d'abord avec les nouvelles colonnes, puis fallback sans elles
         try:
-            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max FROM subventions WHERE projet_id=?', (self.projet_id,))
+            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max, mode_simplifie, montant_forfaitaire FROM subventions WHERE projet_id=?', (self.projet_id,))
             for subv in cursor.fetchall():
                 data = {
                     'depenses_temps_travail': subv[0],
@@ -1360,16 +1555,28 @@ class ProjectForm(QDialog):
                     'taux': subv[9],
                     'nom': subv[10],
                     'depenses_eligibles_max': subv[11] if len(subv) > 11 else 0,
-                    'montant_subvention_max': subv[12] if len(subv) > 12 else 0
+                    'montant_subvention_max': subv[12] if len(subv) > 12 else 0,
+                    'mode_simplifie': subv[13] if len(subv) > 13 else 0,
+                    'montant_forfaitaire': subv[14] if len(subv) > 14 else 0
                 }
                 self.subventions_data.append(data)
-                cats = []
-                if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
-                if subv[2]: cats.append(f"Externes (coef {subv[3]})")
-                if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
-                if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
-                nom = subv[10] if subv[10] else "Sans nom"
-                subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
+                
+                # Affichage différent selon le mode
+                if data.get('mode_simplifie', 0):
+                    # Mode simplifié : Nom - Taux de subvention : X%
+                    nom = subv[10] if subv[10] else "Sans nom"
+                    taux_calcule = self.calculer_taux_subvention_simplifie(data)
+                    subv_str = f"{nom} - Taux de subvention : {taux_calcule:.0f}%"
+                else:
+                    # Mode détaillé : format existant
+                    cats = []
+                    if subv[0]: cats.append(f"Temps travail (coef {subv[1]})")
+                    if subv[2]: cats.append(f"Externes (coef {subv[3]})")
+                    if subv[4]: cats.append(f"Autres achats (coef {subv[5]})")
+                    if subv[6]: cats.append(f"Dotation (coef {subv[7]})")
+                    nom = subv[10] if subv[10] else "Sans nom"
+                    subv_str = f"{nom} | {', '.join(cats)} | Cd: {subv[8]} | Taux: {subv[9]}%"
+                
                 self.subv_list.addItem(subv_str)
         except sqlite3.OperationalError:
             # Fallback pour les anciennes bases de données sans les nouvelles colonnes
@@ -1388,7 +1595,9 @@ class ProjectForm(QDialog):
                     'taux': subv[9],
                     'nom': subv[10],
                     'depenses_eligibles_max': 0,  # Valeur par défaut
-                    'montant_subvention_max': 0   # Valeur par défaut
+                    'montant_subvention_max': 0,  # Valeur par défaut
+                    'mode_simplifie': 0,          # Valeur par défaut
+                    'montant_forfaitaire': 0      # Valeur par défaut
                 }
                 self.subventions_data.append(data)
                 cats = []
