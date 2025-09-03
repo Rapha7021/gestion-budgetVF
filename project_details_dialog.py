@@ -3,7 +3,7 @@ from PyQt6.QtCore import Qt
 import sqlite3
 import os
 import datetime
-from utils import format_montant
+from utils import format_montant, format_montant_aligne
 DB_PATH = 'gestion_budget.db'
 
 class ProjectDetailsDialog(QDialog):
@@ -81,9 +81,20 @@ class ProjectDetailsDialog(QDialog):
         # Affichage des coûts
         self.budget_vbox = QVBoxLayout()
         self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
-        self.budget_vbox.addWidget(QLabel(f"Coût chargé : {format_montant(couts['charge'])}"))
-        self.budget_vbox.addWidget(QLabel(f"Coût production : {format_montant(couts['direct'])}"))
-        self.budget_vbox.addWidget(QLabel(f"Coût complet : {format_montant(couts['complet'])}"))
+        
+        # Créer les labels avec police monospace pour l'alignement
+        cout_charge_label = QLabel(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
+        cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_charge_label)
+        
+        cout_production_label = QLabel(f"Coût production : {format_montant_aligne(couts['direct'])}")
+        cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_production_label)
+        
+        cout_complet_label = QLabel(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
+        cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_complet_label)
+        
         grid.addLayout(self.budget_vbox, 0, 2)
         
         # En haut à gauche
@@ -587,10 +598,18 @@ class ProjectDetailsDialog(QDialog):
                 else:
                     missing_data = True
 
-            # Mise à jour des labels
-            self.budget_vbox.itemAt(1).widget().setText(f"Coût chargé : {format_montant(couts['charge'])}")
-            self.budget_vbox.itemAt(2).widget().setText(f"Coût production : {format_montant(couts['direct'])}")
-            self.budget_vbox.itemAt(3).widget().setText(f"Coût complet : {format_montant(couts['complet'])}")
+            # Mise à jour des labels avec alignement
+            cout_charge_label = self.budget_vbox.itemAt(1).widget()
+            cout_charge_label.setText(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
+            cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
+            
+            cout_production_label = self.budget_vbox.itemAt(2).widget()
+            cout_production_label.setText(f"Coût production : {format_montant_aligne(couts['direct'])}")
+            cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
+            
+            cout_complet_label = self.budget_vbox.itemAt(3).widget()
+            cout_complet_label.setText(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
+            cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
 
             if missing_data:
                 self.budget_vbox.addWidget(QLabel("<i>Note : Certaines données sont manquantes pour le calcul.</i>"))

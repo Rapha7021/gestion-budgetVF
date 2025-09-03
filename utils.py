@@ -2,23 +2,44 @@
 Utilitaires pour l'application de gestion de budget
 """
 
-def format_montant(montant):
+def format_montant(montant, align_width=None):
     """
     Formate un montant en format français avec espaces pour les milliers 
-    et virgule pour les décimales.
+    sans décimales.
     
-    Exemple: 81036.72 -> "81 036,72 €"
+    Args:
+        montant: Le montant à formater
+        align_width: Largeur pour l'alignement à droite (optionnel)
+    
+    Exemple: 
+        81036.72 -> "81 037 €"
+        format_montant(1234, 15) -> "      1 234 €"
     """
     if montant is None or montant == 0:
-        return "0,00 €"
+        result = "0 €"
+    else:
+        # Arrondir à l'entier le plus proche
+        montant_arrondi = round(montant)
+        
+        # Formatage avec séparateur de milliers sans décimales
+        formatted = f"{montant_arrondi:,}"
+        
+        # Conversion au format français
+        # Remplace les virgules (séparateurs de milliers) par des espaces
+        formatted = formatted.replace(",", " ")
+        
+        result = f"{formatted} €"
     
-    # Formatage avec séparateur de milliers et 2 décimales
-    formatted = f"{montant:,.2f}"
+    # Alignement à droite si une largeur est spécifiée
+    if align_width is not None:
+        result = result.rjust(align_width)
     
-    # Conversion au format français
-    # Remplace les virgules (séparateurs de milliers) par un caractère temporaire
-    # Puis remplace les points (séparateurs décimaux) par des virgules
-    # Enfin remplace le caractère temporaire par des espaces
-    formatted = formatted.replace(",", "TEMP").replace(".", ",").replace("TEMP", " ")
-    
-    return f"{formatted} €"
+    return result
+
+
+def format_montant_aligne(montant):
+    """
+    Version alignée de format_montant avec une largeur fixe de 15 caractères.
+    Pratique pour l'affichage en colonnes.
+    """
+    return format_montant(montant, align_width=15)
