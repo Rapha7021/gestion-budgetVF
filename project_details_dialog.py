@@ -1,7 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QInputDialog, QMessageBox, QTextEdit, QDialogButtonBox
 from PyQt6.QtCore import Qt
 import sqlite3
-import os
 import datetime
 from utils import format_montant, format_montant_aligne
 DB_PATH = 'gestion_budget.db'
@@ -77,6 +76,34 @@ class ProjectDetailsDialog(QDialog):
                     couts["charge"] += (montant_charge or 0) * total_jours
                     couts["direct"] += (cout_production or 0) * total_jours
                     couts["complet"] += (cout_complet or 0) * total_jours
+
+            # Ajouter les dépenses externes
+            cursor.execute('''
+                SELECT SUM(montant) 
+                FROM depenses 
+                WHERE projet_id = ?
+            ''', (projet_id,))
+            depenses_externes = cursor.fetchone()
+            if depenses_externes and depenses_externes[0]:
+                montant_depenses = float(depenses_externes[0])
+                # Les dépenses externes s'ajoutent à tous les types de coûts
+                couts["charge"] += montant_depenses
+                couts["direct"] += montant_depenses
+                couts["complet"] += montant_depenses
+
+            # Ajouter les autres dépenses
+            cursor.execute('''
+                SELECT SUM(montant) 
+                FROM autres_depenses 
+                WHERE projet_id = ?
+            ''', (projet_id,))
+            autres_depenses = cursor.fetchone()
+            if autres_depenses and autres_depenses[0]:
+                montant_autres = float(autres_depenses[0])
+                # Les autres dépenses s'ajoutent à tous les types de coûts
+                couts["charge"] += montant_autres
+                couts["direct"] += montant_autres
+                couts["complet"] += montant_autres
                     
         # Affichage des coûts
         self.budget_vbox = QVBoxLayout()
@@ -655,6 +682,34 @@ class ProjectDetailsDialog(QDialog):
                     couts["complet"] += (cout_complet or 0) * total_jours
                 else:
                     missing_data = True
+
+            # Ajouter les dépenses externes
+            cursor.execute('''
+                SELECT SUM(montant) 
+                FROM depenses 
+                WHERE projet_id = ?
+            ''', (self.projet_id,))
+            depenses_externes = cursor.fetchone()
+            if depenses_externes and depenses_externes[0]:
+                montant_depenses = float(depenses_externes[0])
+                # Les dépenses externes s'ajoutent à tous les types de coûts
+                couts["charge"] += montant_depenses
+                couts["direct"] += montant_depenses
+                couts["complet"] += montant_depenses
+
+            # Ajouter les autres dépenses
+            cursor.execute('''
+                SELECT SUM(montant) 
+                FROM autres_depenses 
+                WHERE projet_id = ?
+            ''', (self.projet_id,))
+            autres_depenses = cursor.fetchone()
+            if autres_depenses and autres_depenses[0]:
+                montant_autres = float(autres_depenses[0])
+                # Les autres dépenses s'ajoutent à tous les types de coûts
+                couts["charge"] += montant_autres
+                couts["direct"] += montant_autres
+                couts["complet"] += montant_autres
 
             # Mise à jour des labels avec alignement
             cout_charge_label = self.budget_vbox.itemAt(1).widget()
