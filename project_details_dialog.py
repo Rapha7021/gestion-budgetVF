@@ -207,6 +207,9 @@ class ProjectDetailsDialog(QDialog):
         # Ajout du bouton "Gérer les tâches"
         manage_tasks_btn = QPushButton("Gérer les tâches")
         btn_hbox.addWidget(manage_tasks_btn)
+        # Ajout du bouton "Compte de résultat global"
+        compte_resultat_btn = QPushButton("Compte de résultat global")
+        btn_hbox.addWidget(compte_resultat_btn)
         main_layout.addLayout(btn_hbox)
 
         self.projet_id = projet_id
@@ -222,6 +225,8 @@ class ProjectDetailsDialog(QDialog):
         edit_budget_btn.clicked.connect(self.edit_budget)
         # Connexion du bouton "Gérer les tâches"
         manage_tasks_btn.clicked.connect(self.open_task_manager)
+        # Connexion du bouton "Compte de résultat global"
+        compte_resultat_btn.clicked.connect(self.open_compte_resultat)
 
         # Espace vide en dessous
         main_layout.addStretch()
@@ -343,6 +348,59 @@ class ProjectDetailsDialog(QDialog):
         dlg.exec()
         # Actualiser les coûts et subventions après gestion des tâches
         self.refresh_budget()
+
+    def open_compte_resultat(self):
+        """Ouvre le compte de résultat pour ce projet spécifique"""
+        try:
+            # Récupérer les dates du projet pour déterminer les années
+            import sqlite3
+            import datetime
+            from compte_resultat_display import show_compte_resultat
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+            date_row = cursor.fetchone()
+            conn.close()
+            
+            if not date_row or not date_row[0] or not date_row[1]:
+                QMessageBox.warning(self, "Erreur", "Les dates de début et fin du projet ne sont pas définies.")
+                return
+            
+            try:
+                # Convertir les dates MM/yyyy en objets datetime
+                debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+                
+                # Générer la liste des années du projet
+                years = list(range(debut_projet.year, fin_projet.year + 1))
+                
+                # Configuration pour le compte de résultat
+                config_data = {
+                    'project_ids': [self.projet_id],  # Seulement ce projet
+                    'years': years,  # Toutes les années du projet
+                    'period_type': 'yearly',  # Type de période annuel
+                    'granularity': 'yearly',  # Granularité annuelle
+                    'cost_type': 'montant_charge'  # Coûts chargés
+                }
+                
+                # Ouvrir le compte de résultat
+                show_compte_resultat(self, config_data)
+                
+            except ValueError as e:
+                QMessageBox.warning(self, "Erreur", f"Format de date invalide dans le projet : {str(e)}")
+                
+        except ImportError as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Impossible de charger le module de compte de résultat :\n{str(e)}\n\n"
+                "Assurez-vous que le fichier compte_resultat_display.py est présent."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Erreur lors de l'ouverture du compte de résultat :\n{str(e)}"
+            )
 
     def get_project_data_for_subventions(self):
         """Récupère les données du projet pour calculer les subventions (similaire à SubventionDialog)"""
