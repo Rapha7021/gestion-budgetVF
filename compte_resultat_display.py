@@ -97,10 +97,10 @@ class CompteResultatDisplay(QDialog):
         finally:
             conn.close()
     
-    def format_currency(self, value, with_decimals=True):
+    def format_currency(self, value, with_decimals=False):
         """Formate une valeur monétaire avec le formatage français :
         - Séparateur des milliers : espace
-        - Séparateur des décimales : virgule
+        - Arrondissement à l'entier le plus proche par défaut
         """
         if value == 0:
             return ""
@@ -108,13 +108,15 @@ class CompteResultatDisplay(QDialog):
         if with_decimals:
             # Formatage avec 2 décimales
             formatted = f"{value:,.2f}"
+            # Remplacer la virgule (séparateur des milliers) par un espace
+            # et le point (séparateur des décimales) par une virgule
+            formatted = formatted.replace(",", "TEMP").replace(".", ",").replace("TEMP", " ")
         else:
-            # Formatage sans décimales (pour les jours par exemple)
-            formatted = f"{value:,.0f}"
-        
-        # Remplacer la virgule (séparateur des milliers) par un espace
-        # et le point (séparateur des décimales) par une virgule
-        formatted = formatted.replace(",", "TEMP").replace(".", ",").replace("TEMP", " ")
+            # Formatage sans décimales - arrondir à l'entier le plus proche
+            rounded_value = round(value)
+            formatted = f"{rounded_value:,}"
+            # Remplacer la virgule (séparateur des milliers) par un espace
+            formatted = formatted.replace(",", " ")
         
         return formatted
     
@@ -266,7 +268,7 @@ class CompteResultatDisplay(QDialog):
         # Configuration de l'apparence
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         
         # Rendre le tableau en lecture seule
@@ -774,18 +776,19 @@ class CompteResultatDisplay(QDialog):
         """Remplit le tableau avec les données"""
         # Structure du compte de résultat selon vos spécifications
         structure = [
-            ("PRODUITS", "header"),
-            ("Recettes", "recettes"),
-            ("Subventions", "subventions"),
-            ("TOTAL PRODUITS", "total_produits"),
             ("CHARGES", "header"),
             ("Achats et sous-traitance", "achats_sous_traitance"),
             ("Autres achats", "autres_achats"),
             ("Dotation aux amortissements", "dotation_amortissements"),
             (self.get_cost_type_label(), "cout_direct"),  # Nom dynamique selon le type de coût
-            ("  → Nombre de jours TOTAL", "nb_jours_total"),
-            ("  → Coût moyen par jour", "cout_moyen_par_jour"),
+            ("  - Nombre de jours TOTAL", "nb_jours_total"),
+            ("  - Coût moyen par jour", "cout_moyen_par_jour"),
             ("TOTAL CHARGES", "total_charges"),
+            ("", "separator"),
+            ("PRODUITS", "header"),
+            ("Chiffre d'affaires", "recettes"),
+            ("Subventions", "subventions"),
+            ("TOTAL PRODUITS", "total_produits"),
             ("", "separator"),
         ]
         
@@ -818,7 +821,12 @@ class CompteResultatDisplay(QDialog):
                 font.setBold(True)
                 item.setFont(font)
                 if "resultat" in data_key:
-                    item.setBackground(QColor(46, 204, 113) if data_key == "resultat_net" else QColor(52, 152, 219))
+                    # Ligne RÉSULTAT FINANCIER entièrement en rouge
+                    item.setBackground(QColor(231, 76, 60))
+                    item.setForeground(QColor(255, 255, 255))
+                elif data_key.startswith("total_"):
+                    # Lignes TOTAL CHARGES et TOTAL PRODUITS en bleu
+                    item.setBackground(QColor(52, 152, 219))
                     item.setForeground(QColor(255, 255, 255))
             
             self.table.setItem(row, 0, item)
@@ -839,8 +847,8 @@ class CompteResultatDisplay(QDialog):
                     item.setFont(font)
                     
                     if "resultat_financier" in data_key:
-                        color = QColor(46, 204, 113) if value >= 0 else QColor(231, 76, 60)
-                        item.setBackground(color)
+                        # Ligne RÉSULTAT FINANCIER entièrement en rouge
+                        item.setBackground(QColor(231, 76, 60))
                         item.setForeground(QColor(255, 255, 255))
                     elif "total_" in data_key:
                         item.setBackground(QColor(52, 152, 219))
@@ -891,19 +899,21 @@ class CompteResultatDisplay(QDialog):
                     
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     
+                    # Toute la colonne TOTAL en gras
+                    font = QFont()
+                    font.setBold(True)
+                    item.setFont(font)
+                    
                     # Style spécial pour les indicateurs
                     if data_key in ["nb_jours_total", "cout_moyen_par_jour"]:
                         item.setForeground(QColor(100, 100, 100))
                     elif data_key.startswith("total_") or data_key.startswith("resultat_"):
-                        font = QFont()
-                        font.setBold(True)
-                        item.setFont(font)
-                        
                         if "resultat_financier" in data_key:
-                            color = QColor(46, 204, 113) if total_value >= 0 else QColor(231, 76, 60)
-                            item.setBackground(color)
+                            # Ligne RÉSULTAT FINANCIER entièrement en rouge
+                            item.setBackground(QColor(231, 76, 60))
                             item.setForeground(QColor(255, 255, 255))
-                        elif "total_" in data_key:
+                        elif data_key.startswith("total_"):
+                            # Lignes TOTAL CHARGES et TOTAL PRODUITS en bleu
                             item.setBackground(QColor(52, 152, 219))
                             item.setForeground(QColor(255, 255, 255))
                     
