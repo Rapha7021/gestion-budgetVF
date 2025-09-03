@@ -615,25 +615,36 @@ class ProjectDetailsDialog(QDialog):
                     SELECT nom, depenses_temps_travail, coef_temps_travail, 
                            depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
                            depenses_dotation_amortissements, coef_dotation_amortissements, 
-                           cd, taux, montant_subvention_max, depenses_eligibles_max
+                           cd, taux, montant_subvention_max, depenses_eligibles_max, mode_simplifie, montant_forfaitaire
                     FROM subventions 
                     WHERE projet_id = ?
                 ''', (self.projet_id,))
                 subventions = cursor.fetchall()
             except sqlite3.OperationalError:
-                # Les colonnes montant_subvention_max et depenses_eligibles_max n'existent peut-être pas encore
+                # Les colonnes mode_simplifie et montant_forfaitaire n'existent peut-être pas encore
                 try:
                     cursor.execute('''
                         SELECT nom, depenses_temps_travail, coef_temps_travail, 
                                depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
                                depenses_dotation_amortissements, coef_dotation_amortissements, 
-                               cd, taux
+                               cd, taux, montant_subvention_max, depenses_eligibles_max
                         FROM subventions 
                         WHERE projet_id = ?
                     ''', (self.projet_id,))
-                    subventions = [list(row) + [0, 0] for row in cursor.fetchall()]  # Ajouter 0 pour montant_max et depenses_max
+                    subventions = [list(row) + [0, 0] for row in cursor.fetchall()]  # Ajouter 0 pour mode_simplifie et montant_forfaitaire
                 except sqlite3.OperationalError:
-                    subventions = []
+                    try:
+                        cursor.execute('''
+                            SELECT nom, depenses_temps_travail, coef_temps_travail, 
+                                   depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats,
+                                   depenses_dotation_amortissements, coef_dotation_amortissements, 
+                                   cd, taux
+                            FROM subventions 
+                            WHERE projet_id = ?
+                        ''', (self.projet_id,))
+                        subventions = [list(row) + [0, 0, 0, 0] for row in cursor.fetchall()]  # Ajouter 0 pour montant_max, depenses_max, mode_simplifie et montant_forfaitaire
+                    except sqlite3.OperationalError:
+                        subventions = []
 
             if not subventions:
                 return
@@ -648,49 +659,77 @@ class ProjectDetailsDialog(QDialog):
             total_subventions = 0
 
             for subv in subventions:
-                if len(subv) >= 13:
-                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max, depenses_max = subv
+                if len(subv) >= 15:
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max, depenses_max, mode_simplifie, montant_forfaitaire = subv
+                elif len(subv) >= 13:
+                    nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max, depenses_max = subv[:13]
+                    mode_simplifie = subv[13] if len(subv) > 13 else 0
+                    montant_forfaitaire = subv[14] if len(subv) > 14 else 0
                 else:
                     nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux = subv[:11]
                     montant_max = subv[11] if len(subv) > 11 else 0
                     depenses_max = subv[12] if len(subv) > 12 else 0
+                    mode_simplifie = subv[13] if len(subv) > 13 else 0
+                    montant_forfaitaire = subv[14] if len(subv) > 14 else 0
 
-                # Calculer l'assiette éligible (avant application du taux)
-                assiette_eligible = 0
+                # Vérifier si c'est une subvention en mode simplifié
+                if mode_simplifie:
+                    # Mode simplifié : calculer l'assiette éligible totale et le taux
+                    assiette_totale = (projet_data['temps_travail_total'] + 
+                                     projet_data['depenses_externes'] + 
+                                     projet_data['autres_achats'] + 
+                                     projet_data['amortissements'])
+                    
+                    # Calculer le taux automatiquement
+                    if assiette_totale > 0:
+                        taux_calcule = (montant_forfaitaire / assiette_totale) * 100
+                    else:
+                        taux_calcule = 0
+                    
+                    # Afficher l'assiette éligible totale avec le taux calculé
+                    subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_totale)} (taux : {taux_calcule:.2f} %)")
+                    self.budget_vbox.addWidget(subv_label)
+                    
+                    # Ajouter le montant forfaitaire au total
+                    total_subventions += montant_forfaitaire
+                    
+                else:
+                    # Mode détaillé : calcul avec les coefficients
+                    assiette_eligible = 0
 
-                # Temps de travail
-                if depenses_temps:
-                    temps_travail = projet_data['temps_travail_total'] * (cd or 1)
-                    assiette_eligible += (coef_temps or 0) * temps_travail
+                    # Temps de travail
+                    if depenses_temps:
+                        temps_travail = projet_data['temps_travail_total'] * (cd or 1)
+                        assiette_eligible += (coef_temps or 0) * temps_travail
 
-                # Dépenses externes
-                if depenses_ext:
-                    assiette_eligible += (coef_ext or 0) * projet_data['depenses_externes']
+                    # Dépenses externes
+                    if depenses_ext:
+                        assiette_eligible += (coef_ext or 0) * projet_data['depenses_externes']
 
-                # Autres achats
-                if depenses_autres:
-                    assiette_eligible += (coef_autres or 0) * projet_data['autres_achats']
+                    # Autres achats
+                    if depenses_autres:
+                        assiette_eligible += (coef_autres or 0) * projet_data['autres_achats']
 
-                # Dotation amortissements
-                if depenses_amort:
-                    assiette_eligible += (coef_amort or 0) * projet_data['amortissements']
+                    # Dotation amortissements
+                    if depenses_amort:
+                        assiette_eligible += (coef_amort or 0) * projet_data['amortissements']
 
-                # Appliquer le plafond sur l'assiette éligible
-                if depenses_max and depenses_max > 0:
-                    assiette_eligible = min(assiette_eligible, depenses_max)
+                    # Appliquer le plafond sur l'assiette éligible
+                    if depenses_max and depenses_max > 0:
+                        assiette_eligible = min(assiette_eligible, depenses_max)
 
-                # Calculer le montant de la subvention (pour le total)
-                montant = assiette_eligible * ((taux or 0) / 100)
+                    # Calculer le montant de la subvention (pour le total)
+                    montant = assiette_eligible * ((taux or 0) / 100)
 
-                # Appliquer le plafond sur le montant final si défini
-                if montant_max and montant_max > 0:
-                    montant = min(montant, montant_max)
+                    # Appliquer le plafond sur le montant final si défini
+                    if montant_max and montant_max > 0:
+                        montant = min(montant, montant_max)
 
-                total_subventions += montant
+                    total_subventions += montant
 
-                # Afficher l'assiette éligible (plafonnée) avec le taux
-                subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_eligible)} (taux : {taux:.0f} %)")
-                self.budget_vbox.addWidget(subv_label)
+                    # Afficher l'assiette éligible (plafonnée) avec le taux
+                    subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_eligible)} (taux : {taux:.0f} %)")
+                    self.budget_vbox.addWidget(subv_label)
 
             # Calculer et afficher le CIR si le projet l'a activé
             if self.has_cir_activated():
