@@ -1377,9 +1377,9 @@ class CompteResultatDisplay(QDialog):
         try:
             # Récupérer les paramètres de subvention pour ce projet
             cursor.execute('''
-                SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes,
-                       depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, 
-                       coef_dotation_amortissements, cd, taux 
+                SELECT mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                       depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux 
                 FROM subventions WHERE projet_id = ?
             ''', (project_id,))
             
@@ -1401,9 +1401,35 @@ class CompteResultatDisplay(QDialog):
             subvention_total_projet = 0
             
             for subvention in subventions_config:
-                (dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
+                (mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
                  dep_amort, coef_amort, cd, taux) = subvention
                 
+                # *** GESTION DU MODE SIMPLIFIÉ (MONTANT FORFAITAIRE) ***
+                if mode_simplifie:
+                    # Mode simplifié : répartir le montant forfaitaire au prorata du temps
+                    # Calculer le nombre total de mois du projet
+                    nb_mois_total = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
+                    
+                    if month:
+                        # Pour un mois spécifique : montant forfaitaire / nb_mois_total
+                        # Vérifier que le mois demandé est dans la période du projet
+                        mois_demande = datetime.date(year, month, 1)
+                        debut_mois = datetime.date(debut_projet.year, debut_projet.month, 1)
+                        fin_mois = datetime.date(fin_projet.year, fin_projet.month, 1)
+                        
+                        if debut_mois <= mois_demande <= fin_mois:
+                            subvention_total_projet += montant_forfaitaire / nb_mois_total
+                    else:
+                        # Pour une année : calculer le nombre de mois de cette année dans le projet
+                        start_month = debut_projet.month if year == debut_projet.year else 1
+                        end_month = fin_projet.month if year == fin_projet.year else 12
+                        nb_mois_annee = end_month - start_month + 1
+                        
+                        subvention_total_projet += (montant_forfaitaire / nb_mois_total) * nb_mois_annee
+                    
+                    continue  # Passer au traitement de la subvention suivante
+                
+                # *** GESTION DU MODE DÉTAILLÉ (COEFFICIENTS) ***
                 # 1. Calculer le montant total de subvention sur tout le projet
                 montant_subvention_config = 0
                 
@@ -1590,9 +1616,9 @@ class CompteResultatDisplay(QDialog):
         try:
             # Récupérer les paramètres de subvention pour ce projet
             cursor.execute('''
-                SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes,
-                       depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, 
-                       coef_dotation_amortissements, cd, taux 
+                SELECT mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                       depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux 
                 FROM subventions WHERE projet_id = ?
             ''', (project_id,))
             
@@ -1600,59 +1626,64 @@ class CompteResultatDisplay(QDialog):
             if not subventions_config:
                 return 0
             
-            # Calculer le montant total de subvention sur tout le projet
-            montant_total_projet = 0
-            
-            for subvention in subventions_config:
-                (dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
-                 dep_amort, coef_amort, cd, taux) = subvention
-                
-                montant_subvention_config = 0
-                
-                # 1. TEMPS DE TRAVAIL - MÊME LOGIQUE QUE subvention_dialog.py
-                if dep_temps and coef_temps:
-                    cout_total_temps = self.calculate_temps_travail_total(cursor, project_id)
-                    temps_travail = cout_total_temps * cd
-                    montant_subvention_config += coef_temps * temps_travail
-                
-                # 2. DÉPENSES EXTERNES - MÊME LOGIQUE
-                if dep_ext and coef_ext:
-                    cursor.execute('''
-                        SELECT COALESCE(SUM(montant), 0) FROM depenses 
-                        WHERE projet_id = ?
-                    ''', (project_id,))
-                    depenses_ext_total = cursor.fetchone()[0] or 0
-                    montant_subvention_config += coef_ext * depenses_ext_total
-                
-                # 3. AUTRES ACHATS - MÊME LOGIQUE
-                if dep_autres and coef_autres:
-                    cursor.execute('''
-                        SELECT COALESCE(SUM(montant), 0) FROM autres_depenses 
-                        WHERE projet_id = ?
-                    ''', (project_id,))
-                    autres_achats_total = cursor.fetchone()[0] or 0
-                    montant_subvention_config += coef_autres * autres_achats_total
-                
-                # 4. AMORTISSEMENTS - MÊME LOGIQUE QUE subvention_dialog.py
-                if dep_amort and coef_amort:
-                    amortissements_total = self.calculate_amortissements_total_subvention_style(
-                        cursor, project_id, projet_info)
-                    montant_subvention_config += coef_amort * amortissements_total
-                
-                # Appliquer le taux de subvention
-                montant_subvention_config = montant_subvention_config * (taux / 100)
-                montant_total_projet += montant_subvention_config
-            
             # Calculer les dates du projet
             debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
             fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
             
-            # Calculer le nombre total de mois du projet
-            nb_mois_total = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
-            
             # Vérifier si l'année demandée est dans la période du projet
             if year < debut_projet.year or year > fin_projet.year:
                 return 0  # L'année n'est pas dans le projet
+            
+            # Calculer le montant total de subvention sur tout le projet
+            montant_total_projet = 0
+            
+            for subvention in subventions_config:
+                (mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
+                 dep_amort, coef_amort, cd, taux) = subvention
+                
+                if mode_simplifie:
+                    # Mode simplifié : utiliser directement le montant forfaitaire
+                    montant_total_projet += montant_forfaitaire
+                else:
+                    # Mode détaillé : calculer selon les coefficients
+                    montant_subvention_config = 0
+                    
+                    # 1. TEMPS DE TRAVAIL - MÊME LOGIQUE QUE subvention_dialog.py
+                    if dep_temps and coef_temps:
+                        cout_total_temps = self.calculate_temps_travail_total(cursor, project_id)
+                        temps_travail = cout_total_temps * cd
+                        montant_subvention_config += coef_temps * temps_travail
+                    
+                    # 2. DÉPENSES EXTERNES - MÊME LOGIQUE
+                    if dep_ext and coef_ext:
+                        cursor.execute('''
+                            SELECT COALESCE(SUM(montant), 0) FROM depenses 
+                            WHERE projet_id = ?
+                        ''', (project_id,))
+                        depenses_ext_total = cursor.fetchone()[0] or 0
+                        montant_subvention_config += coef_ext * depenses_ext_total
+                    
+                    # 3. AUTRES ACHATS - MÊME LOGIQUE
+                    if dep_autres and coef_autres:
+                        cursor.execute('''
+                            SELECT COALESCE(SUM(montant), 0) FROM autres_depenses 
+                            WHERE projet_id = ?
+                        ''', (project_id,))
+                        autres_achats_total = cursor.fetchone()[0] or 0
+                        montant_subvention_config += coef_autres * autres_achats_total
+                    
+                    # 4. AMORTISSEMENTS - MÊME LOGIQUE QUE subvention_dialog.py
+                    if dep_amort and coef_amort:
+                        amortissements_total = self.calculate_amortissements_total_subvention_style(
+                            cursor, project_id, projet_info)
+                        montant_subvention_config += coef_amort * amortissements_total
+                    
+                    # Appliquer le taux de subvention
+                    montant_subvention_config = montant_subvention_config * (taux / 100)
+                    montant_total_projet += montant_subvention_config
+            
+            # Calculer le nombre total de mois du projet
+            nb_mois_total = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
             
             if month:
                 # Pour un mois : Subvention totale / Nombre total de mois du projet
