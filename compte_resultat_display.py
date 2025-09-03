@@ -1323,29 +1323,32 @@ class CompteResultatDisplay(QDialog):
                 header_item = self.table.horizontalHeaderItem(col)
                 is_total_column = header_item and header_item.text() == "TOTAL"
                 
-                # Déterminer la classe CSS selon le contenu de la première colonne
+                # Déterminer la classe CSS selon le contenu et la position
                 css_class = ""
+                first_col_item = self.table.item(row, 0)
+                first_col_text = first_col_item.text() if first_col_item else ""
+                
                 if col == 0:  # Première colonne (libellés)
-                    if "PRODUITS" in value or "CHARGES" in value:
+                    if first_col_text == "PRODUITS" or first_col_text == "CHARGES":
                         css_class = "header"
-                    elif "TOTAL" in value:
+                    elif "TOTAL" in first_col_text:
                         css_class = "total"
-                    elif "RÉSULTAT" in value:
+                    elif "RÉSULTAT" in first_col_text:
                         css_class = "result"
                 else:  # Colonnes de données
-                    first_col_item = self.table.item(row, 0)
-                    if first_col_item:
-                        first_col_text = first_col_item.text()
-                        if "PRODUITS" in first_col_text or "CHARGES" in first_col_text:
-                            css_class = "header"
-                        elif "TOTAL" in first_col_text:
-                            css_class = "total"
-                        elif "RÉSULTAT" in first_col_text:
-                            css_class = "result"
-                        else:
-                            # Si c'est la colonne TOTAL, utiliser la classe spéciale
-                            css_class = "total-column" if is_total_column else "amount"
+                    # Pour les lignes d'en-tête de sections simples (CHARGES/PRODUITS uniquement), 
+                    # ne pas appliquer la couleur de fond aux cellules de données
+                    if first_col_text == "PRODUITS" or first_col_text == "CHARGES":
+                        # Cellules de données des lignes d'en-tête simples : style normal
+                        css_class = "total-column" if is_total_column else "amount"
+                    elif "TOTAL" in first_col_text:
+                        # Lignes TOTAL : toute la ligne colorée
+                        css_class = "total"
+                    elif "RÉSULTAT" in first_col_text:
+                        # Lignes RÉSULTAT : toute la ligne colorée
+                        css_class = "result"
                     else:
+                        # Autres lignes normales
                         css_class = "total-column" if is_total_column else "amount"
                 
                 html += f'<td class="{css_class}">{value}</td>'
