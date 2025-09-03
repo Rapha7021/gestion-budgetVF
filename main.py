@@ -673,11 +673,15 @@ class ProjectForm(QDialog):
          # Boutons valider/annuler
         btns = QHBoxLayout()
         self.btn_ok = QPushButton('Valider')
+        self.btn_budget = QPushButton('Gérer le budget')
         self.btn_cancel = QPushButton('Annuler')
         self.btn_ok.setEnabled(False)
+        self.btn_budget.setEnabled(False)
         self.btn_ok.clicked.connect(self.save_project)
+        self.btn_budget.clicked.connect(self.save_and_open_budget)
         self.btn_cancel.clicked.connect(self.reject)
         btns.addWidget(self.btn_ok)
+        btns.addWidget(self.btn_budget)
         btns.addWidget(self.btn_cancel)
         self.layout.addLayout(btns)
         self.setLayout(self.layout)
@@ -840,6 +844,7 @@ class ProjectForm(QDialog):
             self.date_fin.setStyleSheet("")
 
         self.btn_ok.setEnabled(code_ok and nom_ok and debut_ok and fin_ok and dates_ok)
+        self.btn_budget.setEnabled(code_ok and nom_ok and debut_ok and fin_ok and dates_ok)
 
     def invest_context_menu(self, pos):
         item = self.invest_list.itemAt(pos)
@@ -1480,6 +1485,135 @@ class ProjectForm(QDialog):
         conn.commit()
         conn.close()
         self.accept()
+
+    def save_and_open_budget(self):
+        """Sauvegarde le projet et ouvre le dialogue de budget"""
+        # Sauvegarder les valeurs de la direction courante avant la sauvegarde
+        if (not getattr(self, 'equipe_form_disabled', False) and 
+            hasattr(self, '_current_direction') and self._current_direction is not None and self._current_direction != ''):
+            for label in self.equipe_types_labels:
+                # Vérifier que le label n'est pas vide et existe dans les dictionnaires
+                if label and label in self.equipe_spins and self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
+                    self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        theme_principal = self.theme_principal_combo.currentText()  # Récupère le thème principal
+        
+        if self.projet_id:
+            # Mise à jour du projet existant
+            cursor.execute('''UPDATE projets SET code=?, nom=?, details=?, date_debut=?, date_fin=?, livrables=?, chef=?, etat=?, cir=?, subvention=?, theme_principal=? WHERE id=?''', (
+                self.code_edit.text().strip(),
+                self.nom_edit.text().strip(),
+                self.details_edit.toPlainText().strip(),
+                self.date_debut.text(),
+                self.date_fin.text(),
+                self.livrables_edit.text().strip(),
+                self.chef_combo.currentData(),  # Utilise l'ID du chef sélectionné
+                self.etat_combo.currentText(),
+                int(self.cir_check.isChecked()),
+                1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
+                theme_principal,
+                self.projet_id
+            ))
+            projet_id = self.projet_id
+            # Met à jour les thèmes liés
+            cursor.execute('DELETE FROM projet_themes WHERE projet_id=?', (projet_id,))
+            for nom in self.selected_themes:
+                cursor.execute('SELECT id FROM themes WHERE nom=?', (nom,))
+                res = cursor.fetchone()
+                if res:
+                    theme_id = res[0]
+                    cursor.execute('INSERT INTO projet_themes (projet_id, theme_id) VALUES (?, ?)', (projet_id, theme_id))
+        else:
+            # Création d'un nouveau projet
+            cursor.execute('''INSERT INTO projets (code, nom, details, date_debut, date_fin, livrables, chef, etat, cir, subvention, theme_principal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+                self.code_edit.text().strip(),
+                self.nom_edit.text().strip(),
+                self.details_edit.toPlainText().strip(),
+                self.date_debut.text(),
+                self.date_fin.text(),
+                self.livrables_edit.text().strip(),
+                self.chef_combo.currentData(),  # Utilise l'ID du chef sélectionné
+                self.etat_combo.currentText(),
+                int(self.cir_check.isChecked()),
+                1 if len(self.subventions_data) > 0 else 0,  # Automatique selon la liste
+                theme_principal
+            ))
+            projet_id = cursor.lastrowid
+            
+            # Sauvegarde des thèmes liés pour le nouveau projet
+            for nom in self.selected_themes:
+                cursor.execute('SELECT id FROM themes WHERE nom=?', (nom,))
+                res = cursor.fetchone()
+                if res:
+                    theme_id = res[0]
+                    cursor.execute('INSERT INTO projet_themes (projet_id, theme_id) VALUES (?, ?)', (projet_id, theme_id))
+            
+        # Sauvegarde des investissements
+        cursor.execute('DELETE FROM investissements WHERE projet_id=?', (projet_id,))
+        for i in range(self.invest_list.count()):
+            invest_text = self.invest_list.item(i).text()
+            try:
+                # Parse le texte de l'investissement
+                if 'Nom: ' in invest_text:
+                    nom = invest_text.split('Nom: ')[1].split(',')[0].strip()
+                    montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                else:
+                    # Format ancien sans nom
+                    nom = ""
+                    montant = float(invest_text.split('Montant: ')[1].split(' €')[0].replace(',', '.'))
+                    date_achat = invest_text.split('Date achat: ')[1].split(',')[0].strip()
+                    duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
+                
+                cursor.execute('''INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) 
+                                  VALUES (?, ?, ?, ?, ?)''',
+                              (projet_id, nom, montant, date_achat, duree))
+            except Exception as e:
+                print(f"Erreur lors de la sauvegarde de l'investissement: {e}")
+                continue
+        
+        # Sauvegarde des données d'équipe
+        cursor.execute('DELETE FROM equipe WHERE projet_id=?', (projet_id,))
+        for direction, types_data in self.equipe_data.items():
+            for type_, nombre in types_data.items():
+                if nombre > 0:  # Ne sauvegarder que les membres avec un nombre > 0
+                    cursor.execute('''INSERT INTO equipe (projet_id, direction, type, nombre) 
+                                      VALUES (?, ?, ?, ?)''',
+                                  (projet_id, direction, type_, nombre))
+        
+        # Sauvegarde des subventions
+        cursor.execute('DELETE FROM subventions WHERE projet_id=?', (projet_id,))
+        for data in self.subventions_data:
+            cursor.execute('''INSERT INTO subventions (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, depenses_eligibles_max, montant_subvention_max) 
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (projet_id, data['nom'], data.get('mode_simplifie', 0), data.get('montant_forfaitaire', 0), data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], data.get('depenses_eligibles_max', 0), data.get('montant_subvention_max', 0)))
+        
+        # Sauvegarde des images temporaires (pour les nouveaux projets)
+        if not self.projet_id and hasattr(self, 'temp_images'):  # Nouveau projet avec images temporaires
+            for img_data in self.temp_images:
+                cursor.execute(
+                    'INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)',
+                    (projet_id, img_data['name'], img_data['data'])
+                )
+                
+        conn.commit()
+        conn.close()
+        
+        # Mettre à jour le projet_id si c'était un nouveau projet
+        if not self.projet_id:
+            self.projet_id = projet_id
+            
+        # Ouvrir le dialogue de budget
+        from budget_edit_dialog import BudgetEditDialog
+        budget_dialog = BudgetEditDialog(projet_id, self)
+        budget_dialog.exec()
+        
+        # Après fermeture du budget, recharger les données du projet
+        self.load_project_data()
 
     def load_project_data(self):
         conn = sqlite3.connect(DB_PATH)
