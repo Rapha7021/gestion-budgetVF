@@ -1,5 +1,6 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QInputDialog, QMessageBox, QTextEdit, QDialogButtonBox
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QInputDialog, QMessageBox, QTextEdit, QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 import sqlite3
 import datetime
 from utils import format_montant, format_montant_aligne
@@ -105,64 +106,31 @@ class ProjectDetailsDialog(QDialog):
                 couts["direct"] += montant_autres
                 couts["complet"] += montant_autres
                     
-        # Affichage des coûts
-        self.budget_vbox = QVBoxLayout()
-        self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
+        # Réorganisation de la mise en page avec une structure plus claire
+        # Partie haute avec informations principales
+        top_section = QHBoxLayout()
         
-        # Créer les labels avec police monospace pour l'alignement
-        cout_charge_label = QLabel(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
-        cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_charge_label)
-        
-        cout_production_label = QLabel(f"Coût production : {format_montant_aligne(couts['direct'])}")
-        cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_production_label)
-        
-        cout_complet_label = QLabel(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
-        cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_complet_label)
-        
-        grid.addLayout(self.budget_vbox, 0, 2)
-        
-        # En haut à gauche
-        left_vbox = QVBoxLayout()
-        left_vbox.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
-        h_nom = QHBoxLayout()
-        h_nom.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
-        left_vbox.addLayout(h_nom)
+        # Colonne gauche - Informations projet
+        left_column = QVBoxLayout()
+        left_column.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
+        left_column.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
         
         # Champ détails avec retour à la ligne automatique
         details_label = QLabel(f"<b>Détails :</b> {projet[2]}")
-        details_label.setWordWrap(True)  # Permet le retour à la ligne automatique
-        details_label.setMaximumWidth(400)  # Limite la largeur pour forcer les retours à la ligne
-        left_vbox.addWidget(details_label)
+        details_label.setWordWrap(True)
+        details_label.setMaximumWidth(350)
+        left_column.addWidget(details_label)
         
-        grid.addLayout(left_vbox, 0, 0)
-        # En haut à droite
-        right_vbox = QVBoxLayout()
-        right_vbox.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
-        right_vbox.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
-        right_vbox.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
-        right_vbox.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
+        left_column.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
+        left_column.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
+        left_column.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
+        left_column.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
         if projet[10]:
-            right_vbox.addWidget(QLabel(f"<b>Thème principal :</b> {projet[10]}"))
+            left_column.addWidget(QLabel(f"<b>Thème principal :</b> {projet[10]}"))
         if themes:
-            right_vbox.addWidget(QLabel("<b>Thèmes :</b> " + ", ".join(themes)))
-        grid.addLayout(right_vbox, 0, 1)
-        # Centre haut
-        center_vbox = QVBoxLayout()
-        center_vbox.addWidget(QLabel(f"<b>Etat :</b> {projet[7]}"))
-        center_vbox.addWidget(QLabel(f"<b>CIR :</b> {'Oui' if projet[8] else 'Non'}"))
-        center_vbox.addWidget(QLabel(f"<b>Subvention :</b> {'Oui' if projet[9] else 'Non'}"))
-        # Investissements
-        invest_text = "<b>Investissements :</b>\n"
-        if investissements:
-            for montant, date_achat, duree in investissements:
-                invest_text += f"- {format_montant(montant)} | Achat: {date_achat} | Durée: {duree} ans\n"
-        else:
-            invest_text += "Aucun"
-        center_vbox.addWidget(QLabel(invest_text))
-        # Equipe
+            left_column.addWidget(QLabel("<b>Thèmes :</b> " + ", ".join(themes)))
+        
+        # Ajouter la section Équipe dans la colonne gauche (en dessous des livrables)
         equipe_text = "<b>Equipe :</b>\n"
         if equipe:
             # Organiser les données d'équipe par direction
@@ -184,9 +152,55 @@ class ProjectDetailsDialog(QDialog):
                 equipe_text += "Aucune info"
         else:
             equipe_text += "Aucune info"
-        center_vbox.addWidget(QLabel(equipe_text))
-        grid.addLayout(center_vbox, 1, 0, 1, 2)
-        # Images en dessous
+        equipe_label = QLabel(equipe_text)
+        equipe_label.setWordWrap(True)  # Activer le retour à la ligne automatique
+        equipe_label.setMaximumWidth(450)  # Élargir la largeur maximum
+        left_column.addWidget(equipe_label)
+        
+        # Colonne centrale - État, CIR, Subvention, Investissements (plus serrés)
+        center_column = QVBoxLayout()
+        center_column.setSpacing(5)  # Réduire l'espacement entre les éléments
+        
+        center_column.addWidget(QLabel(f"<b>Etat :</b> {projet[7]}"))
+        center_column.addWidget(QLabel(f"<b>CIR :</b> {'Oui' if projet[8] else 'Non'}"))
+        center_column.addWidget(QLabel(f"<b>Subvention :</b> {'Oui' if projet[9] else 'Non'}"))
+        
+        # Investissements
+        invest_text = "<b>Investissements :</b>\n"
+        if investissements:
+            for montant, date_achat, duree in investissements:
+                invest_text += f"- {format_montant(montant)} | Achat: {date_achat} | Durée: {duree} ans\n"
+        else:
+            invest_text += "Aucun"
+        invest_label = QLabel(invest_text)
+        invest_label.setMaximumWidth(250)
+        center_column.addWidget(invest_label)
+        
+        # Colonne droite - Budget et subventions
+        self.budget_vbox = QVBoxLayout()
+        self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
+        
+        # Créer les labels avec police monospace pour l'alignement
+        cout_charge_label = QLabel(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
+        cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_charge_label)
+        
+        cout_production_label = QLabel(f"Coût production : {format_montant_aligne(couts['direct'])}")
+        cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_production_label)
+        
+        cout_complet_label = QLabel(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
+        cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
+        self.budget_vbox.addWidget(cout_complet_label)
+        
+        # Ajouter les colonnes au layout horizontal
+        top_section.addLayout(left_column)
+        top_section.addLayout(center_column)
+        top_section.addLayout(self.budget_vbox)
+        
+        # Ajouter la section haute au layout principal
+        main_layout.addLayout(top_section)
+        # Section images
         img_label = QLabel("<b>Images du projet :</b>")
         main_layout.addWidget(img_label)
         img_hbox = QHBoxLayout()
@@ -207,7 +221,6 @@ class ProjectDetailsDialog(QDialog):
                 error_widget.setStyleSheet("border: 1px solid red; background-color: #ffeeee; color: red;")
                 error_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 img_hbox.addWidget(error_widget)
-        main_layout.addLayout(grid)
         main_layout.addLayout(img_hbox)
 
         # Section actualités
@@ -584,7 +597,7 @@ class ProjectDetailsDialog(QDialog):
                 return False
 
     def refresh_cir(self, total_subventions):
-        """Calcule et affiche le montant du CIR"""
+        """Calcule et affiche le montant du CIR sous forme de tableau"""
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             
@@ -626,20 +639,78 @@ class ProjectDetailsDialog(QDialog):
             # Soustraire les subventions
             montant_net_eligible = montant_eligible - total_subventions
 
-            # Ajouter un séparateur
-            self.budget_vbox.addWidget(QLabel(""))
+            # Ajouter un titre pour le CIR
+            self.budget_vbox.addWidget(QLabel("<b>CIR :</b>"))
+
+            # Créer le tableau du CIR
+            cir_table = QTableWidget()
+            cir_table.setRowCount(1)  # Une seule ligne pour le CIR
+            cir_table.setColumnCount(3)
+            
+            # Définir les en-têtes
+            headers = ["Taux", "Coût éligible courant", "CIR attendue"]
+            cir_table.setHorizontalHeaderLabels(headers)
+            
+            # Ajuster la taille du tableau
+            cir_table.setMaximumHeight(80)  # Hauteur fixe pour une seule ligne
+            cir_table.setMinimumHeight(80)
+            
+            # Configurer l'apparence du tableau
+            cir_table.setAlternatingRowColors(True)
+            cir_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            cir_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            
+            # Style similaire au tableau des subventions
+            cir_table.setStyleSheet("""
+                QHeaderView::section {
+                    font-size: 10px;
+                    font-weight: bold;
+                    padding: 2px;
+                    background-color: #f0f0f0;
+                    border: 1px solid #d0d0d0;
+                }
+                QTableWidget {
+                    font-size: 9px;
+                }
+            """)
+            
+            # Ajuster automatiquement la largeur des colonnes
+            header = cir_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Taux
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)          # Coût éligible courant
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Subvention attendue
+
+            # Remplir les données du tableau
+            taux_k3_percent = k3 * 100  # Convertir en pourcentage
             
             # Vérifier si le CIR est applicable
             if montant_net_eligible > 0:
-                # CIR applicable - afficher l'assiette éligible avec le taux K3
-                taux_k3_percent = k3 * 100  # Convertir en pourcentage
-                cir_label = QLabel(f"Assiette éligible \"CIR\" : {format_montant(montant_net_eligible)} (taux : {taux_k3_percent:.0f} %)")
-                self.budget_vbox.addWidget(cir_label)
+                # CIR applicable
+                cir_attendu = montant_net_eligible * k3
+                
+                # Taux
+                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.0f}%"))
+                
+                # Coût éligible courant
+                cir_table.setItem(0, 1, QTableWidgetItem(format_montant(montant_net_eligible)))
+                
+                # Subvention attendue
+                cir_table.setItem(0, 2, QTableWidgetItem(format_montant(cir_attendu)))
+                
             else:
-                # CIR non applicable - afficher le message explicatif
-                cir_label = QLabel("CIR non applicable (subventions > dépenses éligibles)")
-                cir_label.setStyleSheet("color: #e74c3c; font-style: italic;")  # Rouge et italique pour bien voir
-                self.budget_vbox.addWidget(cir_label)
+                # CIR non applicable
+                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.0f}%"))
+                cir_table.setItem(0, 1, QTableWidgetItem("Non applicable"))
+                cir_table.setItem(0, 2, QTableWidgetItem("0 €"))
+                
+                # Colorer la ligne en rouge pour indiquer que le CIR n'est pas applicable
+                for col in range(3):
+                    item = cir_table.item(0, col)
+                    if item:
+                        item.setBackground(QColor(255, 235, 235))  # Fond rouge clair
+
+            # Ajouter le tableau au layout
+            self.budget_vbox.addWidget(cir_table)
 
     def refresh_budget(self):
         """Recalcule et met à jour les coûts du budget."""
@@ -731,7 +802,7 @@ class ProjectDetailsDialog(QDialog):
             self.refresh_subventions()
 
     def refresh_subventions(self):
-        """Calcule et affiche les montants des subventions"""
+        """Calcule et affiche les montants des subventions sous forme de tableau"""
         # Supprimer les anciens labels de subventions (s'ils existent)
         while self.budget_vbox.count() > 4:  # Garder seulement les 4 premiers items (titre + 3 coûts)
             item = self.budget_vbox.takeAt(self.budget_vbox.count() - 1)
@@ -784,13 +855,54 @@ class ProjectDetailsDialog(QDialog):
             # Récupérer les données du projet
             projet_data = self.get_project_data_for_subventions()
 
-            # Ajouter un séparateur
+            # Ajouter un séparateur et titre
             self.budget_vbox.addWidget(QLabel(""))
             self.budget_vbox.addWidget(QLabel("<b>Subventions :</b>"))
 
+            # Créer le tableau des subventions
+            subv_table = QTableWidget()
+            subv_table.setRowCount(len(subventions))
+            subv_table.setColumnCount(6)
+            
+            # Définir les en-têtes
+            headers = ["Nom", "Coût éligible max", "Aide max", "Taux", "Coût éligible courant", "Subvention attendue"]
+            subv_table.setHorizontalHeaderLabels(headers)
+            
+            # Ajuster la taille du tableau
+            subv_table.setMaximumHeight(120 + len(subventions) * 25)  # Hauteur adaptative
+            subv_table.setMinimumHeight(60 + len(subventions) * 25)
+            
+            # Configurer l'apparence du tableau
+            subv_table.setAlternatingRowColors(True)
+            subv_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            subv_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            
+            # Réduire la taille de la police des en-têtes pour gagner de la place
+            subv_table.setStyleSheet("""
+                QHeaderView::section {
+                    font-size: 10px;
+                    font-weight: bold;
+                    padding: 2px;
+                    background-color: #f0f0f0;
+                    border: 1px solid #d0d0d0;
+                }
+                QTableWidget {
+                    font-size: 9px;
+                }
+            """)
+            
+            # Ajuster automatiquement la largeur des colonnes
+            header = subv_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Nom
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)          # Coût éligible max
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Aide max
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Taux
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)          # Coût éligible courant
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)          # Subvention attendue
+
             total_subventions = 0
 
-            for subv in subventions:
+            for row, subv in enumerate(subventions):
                 if len(subv) >= 15:
                     nom, depenses_temps, coef_temps, depenses_ext, coef_ext, depenses_autres, coef_autres, depenses_amort, coef_amort, cd, taux, montant_max, depenses_max, mode_simplifie, montant_forfaitaire = subv
                 elif len(subv) >= 13:
@@ -803,6 +915,17 @@ class ProjectDetailsDialog(QDialog):
                     depenses_max = subv[12] if len(subv) > 12 else 0
                     mode_simplifie = subv[13] if len(subv) > 13 else 0
                     montant_forfaitaire = subv[14] if len(subv) > 14 else 0
+
+                # Nom de la subvention
+                subv_table.setItem(row, 0, QTableWidgetItem(nom or ""))
+                
+                # Coût éligible max
+                cout_eligible_max = depenses_max if depenses_max and depenses_max > 0 else "Illimité"
+                subv_table.setItem(row, 1, QTableWidgetItem(format_montant(depenses_max) if depenses_max and depenses_max > 0 else "Illimité"))
+                
+                # Aide max
+                aide_max = montant_max if montant_max and montant_max > 0 else "Illimité"
+                subv_table.setItem(row, 2, QTableWidgetItem(format_montant(montant_max) if montant_max and montant_max > 0 else "Illimité"))
 
                 # Vérifier si c'est une subvention en mode simplifié
                 if mode_simplifie:
@@ -818,9 +941,14 @@ class ProjectDetailsDialog(QDialog):
                     else:
                         taux_calcule = 0
                     
-                    # Afficher l'assiette éligible totale avec le taux calculé
-                    subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_totale)} (taux : {taux_calcule:.2f} %)")
-                    self.budget_vbox.addWidget(subv_label)
+                    # Taux
+                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux_calcule:.2f}%"))
+                    
+                    # Coût éligible courant
+                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_totale)))
+                    
+                    # Subvention attendue (montant forfaitaire)
+                    subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant_forfaitaire)))
                     
                     # Ajouter le montant forfaitaire au total
                     total_subventions += montant_forfaitaire
@@ -859,13 +987,19 @@ class ProjectDetailsDialog(QDialog):
 
                     total_subventions += montant
 
-                    # Afficher l'assiette éligible (plafonnée) avec le taux
-                    subv_label = QLabel(f"Assiette éligible \"{nom}\" : {format_montant(assiette_eligible)} (taux : {taux:.0f} %)")
-                    self.budget_vbox.addWidget(subv_label)
+                    # Taux
+                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux:.0f}%" if taux else "0%"))
+                    
+                    # Coût éligible courant
+                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_eligible)))
+                    
+                    # Subvention attendue
+                    subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant)))
+
+            # Ajouter le tableau au layout
+            self.budget_vbox.addWidget(subv_table)
 
             # Calculer et afficher le CIR si le projet l'a activé
             if self.has_cir_activated():
-                # Ajouter un séparateur entre subventions et CIR
-                self.budget_vbox.addWidget(QLabel("─" * 40))  # Trait de séparation
                 self.refresh_cir(total_subventions)
 
