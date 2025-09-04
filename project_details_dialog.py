@@ -654,6 +654,7 @@ class ProjectDetailsDialog(QDialog):
             # Ajuster la taille du tableau
             cir_table.setMaximumHeight(80)  # Hauteur fixe pour une seule ligne
             cir_table.setMinimumHeight(80)
+            cir_table.setMaximumWidth(350)  # Largeur fixe pour l'alignement
             
             # Configurer l'apparence du tableau
             cir_table.setAlternatingRowColors(True)
@@ -676,9 +677,14 @@ class ProjectDetailsDialog(QDialog):
             
             # Ajuster automatiquement la largeur des colonnes
             header = cir_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Taux
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)          # Coût éligible courant
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Subvention attendue
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Taux
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # Coût éligible courant
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # CIR attendue
+            
+            # Définir les largeurs de colonnes pour le CIR
+            cir_table.setColumnWidth(0, 60)   # Taux
+            cir_table.setColumnWidth(1, 150)  # Coût éligible courant
+            cir_table.setColumnWidth(2, 120)  # CIR attendue
 
             # Remplir les données du tableau
             taux_k3_percent = k3 * 100  # Convertir en pourcentage
@@ -709,7 +715,7 @@ class ProjectDetailsDialog(QDialog):
                     if item:
                         item.setBackground(QColor(255, 235, 235))  # Fond rouge clair
 
-            # Ajouter le tableau au layout
+            # Ajouter le tableau directement au layout principal (il sera aligné automatiquement)
             self.budget_vbox.addWidget(cir_table)
 
     def refresh_budget(self):
@@ -864,13 +870,15 @@ class ProjectDetailsDialog(QDialog):
             subv_table.setRowCount(len(subventions))
             subv_table.setColumnCount(6)
             
-            # Définir les en-têtes
-            headers = ["Nom", "Coût éligible max", "Aide max", "Taux", "Coût éligible courant", "Subvention attendue"]
+            # Définir les en-têtes avec sauts de ligne pour réduire la largeur
+            headers = ["Nom", "Coût éligible\nmax", "Aide\nmax", "Taux", "Coût éligible\ncourant", "Subvention\nattendue"]
             subv_table.setHorizontalHeaderLabels(headers)
             
-            # Ajuster la taille du tableau
+            # Ajuster la taille du tableau - largeur réduite
             subv_table.setMaximumHeight(120 + len(subventions) * 25)  # Hauteur adaptative
             subv_table.setMinimumHeight(60 + len(subventions) * 25)
+            subv_table.setMinimumWidth(500)  # Largeur réduite
+            subv_table.setMaximumWidth(550)  # Largeur maximum pour rester compact
             
             # Configurer l'apparence du tableau
             subv_table.setAlternatingRowColors(True)
@@ -880,25 +888,34 @@ class ProjectDetailsDialog(QDialog):
             # Réduire la taille de la police des en-têtes pour gagner de la place
             subv_table.setStyleSheet("""
                 QHeaderView::section {
-                    font-size: 10px;
+                    font-size: 9px;
                     font-weight: bold;
                     padding: 2px;
                     background-color: #f0f0f0;
                     border: 1px solid #d0d0d0;
+                    text-align: center;
                 }
                 QTableWidget {
                     font-size: 9px;
                 }
             """)
             
-            # Ajuster automatiquement la largeur des colonnes
+            # Ajuster automatiquement la largeur des colonnes avec des tailles fixes plus petites
             header = subv_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Nom
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)          # Coût éligible max
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Aide max
-            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Taux
-            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)          # Coût éligible courant
-            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)          # Subvention attendue
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Nom
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # Coût éligible max
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # Aide max
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)  # Taux
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)  # Coût éligible courant
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)  # Subvention attendue
+            
+            # Définir les largeurs de colonnes plus petites
+            subv_table.setColumnWidth(0, 80)   # Nom
+            subv_table.setColumnWidth(1, 85)   # Coût éligible max
+            subv_table.setColumnWidth(2, 75)   # Aide max
+            subv_table.setColumnWidth(3, 50)   # Taux
+            subv_table.setColumnWidth(4, 100)  # Coût éligible courant
+            subv_table.setColumnWidth(5, 100)  # Subvention attendue
 
             total_subventions = 0
 
