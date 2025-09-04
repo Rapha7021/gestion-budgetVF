@@ -694,8 +694,8 @@ class ProjectDetailsDialog(QDialog):
                 # CIR applicable
                 cir_attendu = montant_net_eligible * k3
                 
-                # Taux
-                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.0f}%"))
+                # Taux (avec virgule française)
+                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.1f}%".replace('.', ',')))
                 
                 # Coût éligible courant
                 cir_table.setItem(0, 1, QTableWidgetItem(format_montant(montant_net_eligible)))
@@ -705,7 +705,7 @@ class ProjectDetailsDialog(QDialog):
                 
             else:
                 # CIR non applicable
-                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.0f}%"))
+                cir_table.setItem(0, 0, QTableWidgetItem(f"{taux_k3_percent:.1f}%".replace('.', ',')))
                 cir_table.setItem(0, 1, QTableWidgetItem("Non applicable"))
                 cir_table.setItem(0, 2, QTableWidgetItem("0 €"))
                 
@@ -936,9 +936,12 @@ class ProjectDetailsDialog(QDialog):
                 # Nom de la subvention
                 subv_table.setItem(row, 0, QTableWidgetItem(nom or ""))
                 
-                # Coût éligible max
-                cout_eligible_max = depenses_max if depenses_max and depenses_max > 0 else "Illimité"
-                subv_table.setItem(row, 1, QTableWidgetItem(format_montant(depenses_max) if depenses_max and depenses_max > 0 else "Illimité"))
+                # Coût éligible max - afficher "---" pour les subventions forfaitaires
+                if mode_simplifie:
+                    subv_table.setItem(row, 1, QTableWidgetItem("---"))
+                else:
+                    cout_eligible_max = depenses_max if depenses_max and depenses_max > 0 else "Illimité"
+                    subv_table.setItem(row, 1, QTableWidgetItem(format_montant(depenses_max) if depenses_max and depenses_max > 0 else "Illimité"))
                 
                 # Aide max
                 aide_max = montant_max if montant_max and montant_max > 0 else "Illimité"
@@ -958,8 +961,8 @@ class ProjectDetailsDialog(QDialog):
                     else:
                         taux_calcule = 0
                     
-                    # Taux
-                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux_calcule:.2f}%"))
+                    # Taux (avec virgule française)
+                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux_calcule:.1f}%".replace('.', ',')))
                     
                     # Coût éligible courant
                     subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_totale)))
@@ -1004,8 +1007,8 @@ class ProjectDetailsDialog(QDialog):
 
                     total_subventions += montant
 
-                    # Taux
-                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux:.0f}%" if taux else "0%"))
+                    # Taux (avec virgule française)
+                    subv_table.setItem(row, 3, QTableWidgetItem(f"{taux:.1f}%".replace('.', ',') if taux else "0,0%"))
                     
                     # Coût éligible courant
                     subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_eligible)))
