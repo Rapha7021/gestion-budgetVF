@@ -266,8 +266,12 @@ class CompteResultatDisplay(QDialog):
         self.table.setHorizontalHeaderLabels(columns)
         
         # Configuration de l'apparence
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Définir une largeur minimum pour la première colonne (libellés)
+        self.table.setColumnWidth(0, 250)  # Largeur fixe de 250 pixels pour les libellés
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        # Les autres colonnes s'adaptent automatiquement
+        for col in range(1, len(columns)):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         
