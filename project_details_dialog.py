@@ -210,15 +210,20 @@ class ProjectDetailsDialog(QDialog):
                 pixmap = QPixmap()
                 if pixmap.loadFromData(data):
                     img_widget = QLabel()
-                    img_widget.setPixmap(pixmap.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio))
-                    img_widget.setStyleSheet("border: 1px solid gray; margin: 2px;")
-                    img_widget.setToolTip(nom)  # Afficher le nom de l'image au survol
+                    # Augmenter la taille d'affichage et améliorer la qualité
+                    scaled_pixmap = pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    img_widget.setPixmap(scaled_pixmap)
+                    img_widget.setStyleSheet("border: 2px solid gray; margin: 5px; background-color: white;")
+                    img_widget.setToolTip(f"{nom}\nTaille originale: {pixmap.width()}x{pixmap.height()}")  # Afficher le nom et la taille originale
+                    # Permettre le clic pour voir en taille réelle
+                    img_widget.mousePressEvent = lambda event, p=pixmap, n=nom: self.show_fullsize_image(p, n)
+                    img_widget.setCursor(Qt.CursorShape.PointingHandCursor)
                     img_hbox.addWidget(img_widget)
             except Exception as e:
                 # En cas d'erreur, afficher un placeholder
                 error_widget = QLabel(f"Erreur image:\n{nom}")
-                error_widget.setFixedSize(150, 150)
-                error_widget.setStyleSheet("border: 1px solid red; background-color: #ffeeee; color: red;")
+                error_widget.setFixedSize(300, 300)
+                error_widget.setStyleSheet("border: 2px solid red; background-color: #ffeeee; color: red;")
                 error_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 img_hbox.addWidget(error_widget)
         main_layout.addLayout(img_hbox)
@@ -273,6 +278,54 @@ class ProjectDetailsDialog(QDialog):
         self.setLayout(main_layout)
 
         self.refresh_budget()  # Recalcul initial des coûts
+
+    def show_fullsize_image(self, pixmap, nom):
+        """Affiche une image en taille réelle dans une nouvelle fenêtre"""
+        from PyQt6.QtWidgets import QScrollArea
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Image: {nom}")
+        dialog.setModal(True)
+        
+        # Définir une taille raisonnable pour la fenêtre
+        screen = dialog.screen().geometry()
+        max_width = int(screen.width() * 0.8)
+        max_height = int(screen.height() * 0.8)
+        
+        # Créer un QScrollArea pour permettre le défilement si l'image est très grande
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        
+        # Créer le label pour l'image
+        image_label = QLabel()
+        image_label.setPixmap(pixmap)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setStyleSheet("background-color: white;")
+        
+        # Ajouter le label au scroll area
+        scroll_area.setWidget(image_label)
+        
+        # Layout de la dialog
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(scroll_area)
+        
+        # Ajuster la taille de la fenêtre
+        img_width = pixmap.width()
+        img_height = pixmap.height()
+        
+        # Calculer la taille optimale de la fenêtre
+        window_width = min(img_width + 50, max_width)
+        window_height = min(img_height + 80, max_height)  # +80 pour la barre de titre
+        
+        dialog.resize(window_width, window_height)
+        
+        # Centrer la fenêtre
+        dialog.move(
+            (screen.width() - window_width) // 2,
+            (screen.height() - window_height) // 2
+        )
+        
+        dialog.exec()
 
     def handle_import_excel(self):
         """Ouvre l'interface d'import Excel configurable avec le projet pré-sélectionné"""

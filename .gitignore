@@ -30,3 +30,8 @@ build/main/warn-main.txt
 .gitignore
 .gitignore
 .gitignore
+main.spec
+dist/main.exe
+build/main/PYZ-00.toc
+build/main/PYZ-00.pyz
+build/main/PYZ-00.pyz
