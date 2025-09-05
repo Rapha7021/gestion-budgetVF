@@ -622,7 +622,7 @@ class CompteResultatDisplay(QDialog):
         - Cela permet une répartition mensuelle cohérente basée sur l'activité réelle de chaque période
         
         Retourne:
-        - Un nombre négatif si CIR applicable (diminue les charges)
+        - Un nombre positif si CIR applicable (c'est un produit)
         - 0 si pas de CIR
         - "CIR_NON_APPLICABLE" si subventions > dépenses éligibles
         """
@@ -760,10 +760,10 @@ class CompteResultatDisplay(QDialog):
                 # Répartir le CIR proportionnellement
                 cir_reparti = cir_total * proportion
                 
-                # Le crédit d'impôt est négatif (diminue les charges)
-                # Si le CIR calculé est positif, on le rend négatif pour diminuer les charges
+                # Le crédit d'impôt est un PRODUIT, donc positif
+                # Si le CIR calculé est positif, on le retourne tel quel
                 if cir_reparti > 0:
-                    result = -abs(cir_reparti)
+                    result = abs(cir_reparti)  # S'assurer que c'est positif
                 else:
                     result = 0
                     
@@ -793,15 +793,17 @@ class CompteResultatDisplay(QDialog):
             ("Chiffre d'affaires", "recettes"),
             ("Subventions", "subventions"),
             ("TOTAL PRODUITS", "total_produits"),
-            ("", "separator"),
         ]
         
-        # Ajouter la ligne CIR seulement si au moins un projet a le CIR activé
+        # Ajouter la ligne CIR APRÈS le total produits si au moins un projet a le CIR activé
         if self.has_cir_projects:
-            structure.append(("Crédit d'impôt", "credit_impot"))
-            structure.append(("", "separator"))
+            structure.append(("", "separator"))  # Ligne vide avant le CIR
+            structure.append(("Crédit d'impôt recherche", "credit_impot"))
         
-        structure.append(("RÉSULTAT FINANCIER", "resultat_financier"))
+        structure.extend([
+            ("", "separator"),
+            ("RÉSULTAT FINANCIER", "resultat_financier")
+        ])
         
         self.table.setRowCount(len(structure))
         
@@ -876,7 +878,13 @@ class CompteResultatDisplay(QDialog):
                         if note:
                             item = QTableWidgetItem(note)
                         else:
-                            item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
+                            # Le CIR est affiché en NÉGATIF mais calculé positivement dans le résultat
+                            cir_value = value
+                            if cir_value != 0:
+                                # Afficher en négatif pour indiquer que c'est un crédit
+                                item = QTableWidgetItem(f"-{self.format_currency(abs(cir_value))}")
+                            else:
+                                item = QTableWidgetItem("")
                     else:
                         # Formatage normal pour les autres données
                         item = QTableWidgetItem(self.format_currency(value) if value != 0 else "")
@@ -898,6 +906,12 @@ class CompteResultatDisplay(QDialog):
                         item = QTableWidgetItem(f"{self.format_currency(total_value, False)} jours" if total_value != 0 else "")
                     elif data_key == "cout_moyen_par_jour":
                         item = QTableWidgetItem(f"{self.format_currency(total_value)} €/jour" if total_value != 0 else "")
+                    elif data_key == "credit_impot":
+                        # CIR affiché en négatif dans la colonne TOTAL aussi
+                        if total_value != 0:
+                            item = QTableWidgetItem(f"-{self.format_currency(abs(total_value))}")
+                        else:
+                            item = QTableWidgetItem("")
                     else:
                         item = QTableWidgetItem(self.format_currency(total_value) if total_value != 0 else "")
                     
@@ -926,7 +940,9 @@ class CompteResultatDisplay(QDialog):
     def calculate_total(self, period_data, total_type):
         """Calcule les totaux selon le type"""
         if total_type == "total_produits":
-            return period_data.get('recettes', 0) + period_data.get('subventions', 0)
+            # TOTAL PRODUITS = uniquement recettes + subventions (sans le CIR)
+            total_produits = period_data.get('recettes', 0) + period_data.get('subventions', 0)
+            return total_produits
         elif total_type == "total_charges":
             # TOTAL CHARGES = uniquement les vraies charges, sans le CIR
             total_charges = (period_data.get('achats_sous_traitance', 0) + 
@@ -940,10 +956,11 @@ class CompteResultatDisplay(QDialog):
             total_produits = self.calculate_total(period_data, "total_produits")
             total_charges = self.calculate_total(period_data, "total_charges")
             
-            # Pour le résultat, on soustrait le CIR séparément
+            # Le résultat = produits - charges + CIR (le CIR améliore le résultat)
             resultat = total_produits - total_charges
             if self.has_cir_projects:
-                resultat += period_data.get('credit_impot', 0)  # CIR est négatif, donc on l'ajoute
+                cir_value = period_data.get('credit_impot', 0)
+                resultat += abs(cir_value)  # Ajouter le CIR au résultat final
             
             return resultat
         
