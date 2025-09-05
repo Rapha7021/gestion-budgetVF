@@ -246,6 +246,9 @@ class ProjectDetailsDialog(QDialog):
         # Bouton import Excel
         import_excel_btn = QPushButton("Importer Excel")
         btn_hbox.addWidget(import_excel_btn)
+        # Nouveau bouton "Modifier le projet"
+        edit_project_btn = QPushButton("Modifier le projet")
+        btn_hbox.addWidget(edit_project_btn)
         # Nouveau bouton "Modifier le budget"
         edit_budget_btn = QPushButton("Modifier le budget")
         btn_hbox.addWidget(edit_budget_btn)
@@ -266,6 +269,8 @@ class ProjectDetailsDialog(QDialog):
         # Import Excel
         self.df_long = None
         import_excel_btn.clicked.connect(self.handle_import_excel)
+        # Connexion du bouton "Modifier le projet"
+        edit_project_btn.clicked.connect(self.edit_project)
         # Connexion du bouton "Modifier le budget"
         edit_budget_btn.clicked.connect(self.edit_budget)
         # Connexion du bouton "Gérer les tâches"
@@ -427,6 +432,35 @@ class ProjectDetailsDialog(QDialog):
             conn.commit()
             conn.close()
             self.load_actualites()
+
+    def edit_project(self):
+        """Ouvre le formulaire de modification du projet"""
+        try:
+            # Importer la classe ProjectForm depuis main.py
+            from main import ProjectForm
+            
+            # Créer et ouvrir le formulaire de modification
+            form = ProjectForm(self, self.projet_id)
+            if form.exec():
+                # Si le projet a été modifié, rafraîchir les données de cette page
+                QMessageBox.information(
+                    self, 
+                    "Projet modifié", 
+                    "Le projet a été modifié avec succès.\n"
+                    "Les données vont être actualisées."
+                )
+                self.refresh_project_data()  # Rafraîchir les données
+        except ImportError as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Impossible de charger le formulaire de projet :\n{str(e)}\n\n"
+                "Assurez-vous que le fichier main.py est présent."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Erreur", 
+                f"Erreur lors de l'ouverture du formulaire de projet :\n{str(e)}"
+            )
 
     def edit_budget(self):
         from budget_edit_dialog import BudgetEditDialog
@@ -1075,4 +1109,26 @@ class ProjectDetailsDialog(QDialog):
             # Calculer et afficher le CIR si le projet l'a activé
             if self.has_cir_activated():
                 self.refresh_cir(total_subventions)
+
+    def refresh_project_data(self):
+        """Rafraîchit toutes les données du projet dans la page de détails"""
+        try:
+            # Fermer et rouvrir la fenêtre avec les nouvelles données
+            # C'est la méthode la plus simple pour tout rafraîchir
+            projet_id = self.projet_id
+            parent = self.parent()
+            
+            # Fermer cette fenêtre
+            self.close()
+            
+            # Rouvrir immédiatement une nouvelle fenêtre avec les données actualisées
+            from project_details_dialog import ProjectDetailsDialog
+            new_dialog = ProjectDetailsDialog(parent, projet_id)
+            new_dialog.show()
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Erreur de rafraîchissement", 
+                f"Impossible de rafraîchir les données :\n{str(e)}"
+            )
 
