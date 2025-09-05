@@ -1457,12 +1457,31 @@ class BudgetEditDialog(QDialog):
 
                 # Trouve la ligne correspondante pour chaque donnée
                 for direction, categorie, membre_id, mois, jours in rows:
-                    # Cherche la ligne correspondante par membre_id
+                    # Cherche la ligne correspondante par membre_id exact d'abord
                     target_row = None
                     for row, stored_membre_id in self.membre_mapping.items():
                         if stored_membre_id == membre_id:
                             target_row = row
                             break
+                    
+                    # Si pas de correspondance exacte, cherche par direction/catégorie
+                    if target_row is None:
+                        for row in range(table.rowCount()):
+                            if row not in self.direction_rows:
+                                # Vérifier si cette ligne correspond à la direction/catégorie
+                                categorie_item = table.item(row, 0)
+                                if categorie_item and categorie_item.text() == categorie:
+                                    # Vérifier la direction (ligne précédente de type direction)
+                                    direction_row = None
+                                    for r in range(row - 1, -1, -1):
+                                        if r in self.direction_rows:
+                                            direction_item = table.item(r, 0)
+                                            if direction_item and direction_item.text() == direction:
+                                                target_row = row
+                                                break
+                                            break
+                                    if target_row is not None:
+                                        break
                     
                     if target_row is not None and target_row not in self.direction_rows:
                         # Trouve la colonne du mois
