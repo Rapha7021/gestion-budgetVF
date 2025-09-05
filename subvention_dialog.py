@@ -930,26 +930,79 @@ class SubventionDialog(QDialog):
                 current_date = current_date.replace(month=current_date.month + 1)
         
         return total
+    
+    def get_projet_dates(self):
+        """Récupère les dates de début et de fin du projet"""
+        if not self.projet_id:
+            return None, None
+            
+        conn = sqlite3.connect('gestion_budget.db')
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+            result = cursor.fetchone()
+            
+            if result and result[0] and result[1]:
+                try:
+                    # Dates du projet au format MM/yyyy
+                    debut_projet = datetime.datetime.strptime(result[0], '%m/%Y')
+                    fin_projet = datetime.datetime.strptime(result[1], '%m/%Y')
+                    return debut_projet, fin_projet
+                except ValueError:
+                    return None, None
+            return None, None
+        except Exception:
+            return None, None
+        finally:
+            conn.close()
         
     def validate_and_accept(self):
+        from PyQt6.QtWidgets import QMessageBox
+        
         # Vérifier que le nom est renseigné
         nom = self.nom_edit.text().strip()
         if not nom:
-            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, 'Erreur', "Le nom de la subvention est obligatoire.")
             return
+
+        # Validation des dates de subvention
+        date_debut_subv = self.date_debut_subv.date().toPyDate()
+        date_fin_subv = self.date_fin_subv.date().toPyDate()
         
+        # Vérifier que la date de début est antérieure à la date de fin
+        if date_debut_subv >= date_fin_subv:
+            QMessageBox.warning(self, 'Erreur', "La date de début de la subvention doit être antérieure à la date de fin.")
+            return
+        
+        # Vérifier que les dates de subvention sont comprises dans les dates du projet
+        debut_projet, fin_projet = self.get_projet_dates()
+        if debut_projet and fin_projet:
+            # Convertir les dates de subvention en datetime pour la comparaison
+            debut_subv_dt = datetime.datetime(date_debut_subv.year, date_debut_subv.month, 1)
+            fin_subv_dt = datetime.datetime(date_fin_subv.year, date_fin_subv.month, 1)
+            
+            if debut_subv_dt < debut_projet:
+                QMessageBox.warning(self, 'Erreur', 
+                    f"La date de début de la subvention ({date_debut_subv.strftime('%m/%Y')}) "
+                    f"ne peut pas être antérieure à la date de début du projet ({debut_projet.strftime('%m/%Y')}).")
+                return
+                
+            if fin_subv_dt > fin_projet:
+                QMessageBox.warning(self, 'Erreur', 
+                    f"La date de fin de la subvention ({date_fin_subv.strftime('%m/%Y')}) "
+                    f"ne peut pas être postérieure à la date de fin du projet ({fin_projet.strftime('%m/%Y')}).")
+                return
+
         if self.mode_simplifie_cb.isChecked():
             # Mode simplifié : vérifier que le montant forfaitaire est > 0
             if self.montant_forfaitaire_spin.value() <= 0:
-                from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, 'Erreur', "Veuillez saisir un montant forfaitaire supérieur à 0.")
                 return
         else:
             # Mode détaillé : vérifier qu'au moins un critère est coché
             if not (self.cb_temps.isChecked() or self.cb_externes.isChecked() or 
                     self.cb_autres.isChecked() or self.cb_dotation.isChecked()):
-                from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, 'Erreur', "Veuillez sélectionner au moins un critère pour la subvention.")
                 return
                 
