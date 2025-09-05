@@ -1,5 +1,7 @@
-from PyQt6.QtWidgets import QDialog, QFormLayout, QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QLineEdit, QFrame
+from PyQt6.QtWidgets import QDialog, QFormLayout, QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QLineEdit, QFrame, QDateEdit
+from PyQt6.QtCore import QDate
 import sqlite3
+import datetime
 from utils import format_montant
 
 class SubventionDialog(QDialog):
@@ -14,6 +16,20 @@ class SubventionDialog(QDialog):
         self.nom_edit = QLineEdit()
         self.nom_edit.setPlaceholderText('Ex: ADEME, Région, Europe...')
         layout.addRow('Nom de la subvention:', self.nom_edit)
+        
+        # Dates de la subvention
+        dates_layout = QHBoxLayout()
+        self.date_debut_subv = QDateEdit()
+        self.date_debut_subv.setDisplayFormat('MM/yyyy')
+        self.date_debut_subv.setDate(QDate.currentDate())
+        dates_layout.addWidget(QLabel('Début:'))
+        dates_layout.addWidget(self.date_debut_subv)
+        dates_layout.addWidget(QLabel('Fin:'))
+        self.date_fin_subv = QDateEdit()
+        self.date_fin_subv.setDisplayFormat('MM/yyyy')
+        self.date_fin_subv.setDate(QDate.currentDate())
+        dates_layout.addWidget(self.date_fin_subv)
+        layout.addRow('Période de la subvention:', dates_layout)
         
         # Case à cocher pour basculer en mode simplifié
         self.mode_simplifie_cb = QCheckBox('Mode simplifié (montant forfaitaire)')
@@ -195,6 +211,9 @@ class SubventionDialog(QDialog):
 
         # Flag pour éviter les confirmations lors du chargement des données
         self.loading_data = False
+        
+        # Définir les dates par défaut du projet
+        self.set_default_dates_from_project()
         
         # Charger les données si modification
         if data:
@@ -593,6 +612,325 @@ class SubventionDialog(QDialog):
         
         self.assiette_label.setText(format_montant(assiette))
         
+    @staticmethod
+    def calculate_distributed_subvention(project_id, subvention_data, target_year, target_month=None):
+        """
+        Calcule la subvention répartie proportionnellement aux dépenses éligibles de la période.
+        
+        Args:
+            project_id: ID du projet
+            subvention_data: Dictionnaire contenant toutes les données de la subvention
+            target_year: Année cible
+            target_month: Mois cible (optionnel, si None = toute l'année)
+            
+        Returns:
+            Montant de la subvention pour la période demandée
+        """
+        if not project_id or not subvention_data:
+            return 0
+            
+        conn = sqlite3.connect('gestion_budget.db')
+        cursor = conn.cursor()
+        
+        try:
+            # 1. Récupérer les dates de début et fin de la subvention
+            date_debut_subv = subvention_data.get('date_debut_subvention')
+            date_fin_subv = subvention_data.get('date_fin_subvention')
+            
+            if not date_debut_subv or not date_fin_subv:
+                # Si pas de dates de subvention, utiliser les dates du projet
+                cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (project_id,))
+                projet_dates = cursor.fetchone()
+                if not projet_dates or not projet_dates[0] or not projet_dates[1]:
+                    return 0
+                date_debut_subv, date_fin_subv = projet_dates[0], projet_dates[1]
+            
+            # 2. Vérifier si la période cible est dans la période de subvention
+            try:
+                debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
+                fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
+                
+                if target_month:
+                    # Vérification pour un mois spécifique
+                    target_date = datetime.datetime(target_year, target_month, 1)
+                    if target_date < debut_subv or target_date > fin_subv:
+                        return 0
+                else:
+                    # Vérification pour une année
+                    year_start = datetime.datetime(target_year, 1, 1)
+                    year_end = datetime.datetime(target_year, 12, 1)
+                    if year_end < debut_subv or year_start > fin_subv:
+                        return 0
+                        
+            except ValueError:
+                return 0
+            
+            # 3. Calculer le montant total de la subvention selon le mode
+            if subvention_data.get('mode_simplifie', 0):
+                montant_total_subvention = float(subvention_data.get('montant_forfaitaire', 0))
+            else:
+                # Mode détaillé : calcul avec coefficients
+                montant_total_subvention = SubventionDialog._calculate_detailed_subvention_amount(
+                    cursor, project_id, subvention_data
+                )
+            
+            if montant_total_subvention <= 0:
+                return 0
+            
+            # 4. Calculer les dépenses éligibles totales de la subvention
+            depenses_eligibles_totales = SubventionDialog._calculate_total_eligible_expenses(
+                cursor, project_id, subvention_data, debut_subv, fin_subv
+            )
+            
+            if depenses_eligibles_totales <= 0:
+                return 0
+            
+            # 5. Calculer les dépenses éligibles de la période cible
+            depenses_eligibles_periode = SubventionDialog._calculate_period_eligible_expenses(
+                cursor, project_id, subvention_data, target_year, target_month
+            )
+            
+            # 6. Calculer la proportion et retourner le montant réparti
+            proportion = depenses_eligibles_periode / depenses_eligibles_totales
+            montant_reparti = montant_total_subvention * proportion
+            
+            return montant_reparti
+            
+        except Exception as e:
+            print(f"Erreur dans calculate_distributed_subvention: {e}")
+            return 0
+        finally:
+            conn.close()
+    
+    @staticmethod
+    def _calculate_detailed_subvention_amount(cursor, project_id, subvention_data):
+        """Calcule le montant total de subvention en mode détaillé"""
+        # Récupérer les données projet comme dans update_montant
+        from main import get_equipe_categories
+        
+        # Code simplifié de get_project_data pour calculer les totaux
+        # (logique similaire à celle dans get_project_data mais statique)
+        
+        data = {
+            'temps_travail_total': 0,
+            'depenses_externes': 0,
+            'autres_achats': 0,
+            'amortissements': 0
+        }
+        
+        # Calcul du temps de travail total
+        cursor.execute("""
+            SELECT tt.annee, tt.categorie, tt.mois, tt.jours 
+            FROM temps_travail tt 
+            WHERE tt.projet_id = ?
+        """, (project_id,))
+        
+        temps_travail_rows = cursor.fetchall()
+        cout_total_temps = 0
+        
+        for annee, categorie, mois, jours in temps_travail_rows:
+            # Récupérer directement par le libellé au lieu d'utiliser des codes
+            cursor.execute("""
+                SELECT montant_charge 
+                FROM categorie_cout 
+                WHERE libelle = ? AND annee = ?
+            """, (categorie, annee))
+            
+            cout_row = cursor.fetchone()
+            if cout_row and cout_row[0]:
+                cout_total_temps += float(jours) * float(cout_row[0])
+        
+        data['temps_travail_total'] = cout_total_temps
+        
+        # Autres dépenses
+        cursor.execute("SELECT SUM(montant) FROM depenses WHERE projet_id = ?", (project_id,))
+        depenses_row = cursor.fetchone()
+        if depenses_row and depenses_row[0]:
+            data['depenses_externes'] = float(depenses_row[0])
+        
+        cursor.execute("SELECT SUM(montant) FROM autres_depenses WHERE projet_id = ?", (project_id,))
+        autres_depenses_row = cursor.fetchone()
+        if autres_depenses_row and autres_depenses_row[0]:
+            data['autres_achats'] = float(autres_depenses_row[0])
+        
+        # Amortissements (logique simplifiée)
+        cursor.execute("SELECT montant, date_achat, duree FROM investissements WHERE projet_id = ?", (project_id,))
+        amortissements_total = 0
+        for montant, date_achat, duree in cursor.fetchall():
+            try:
+                amortissements_total += float(montant)
+            except Exception:
+                pass
+        data['amortissements'] = amortissements_total
+        
+        # Calcul du montant avec coefficients
+        montant = 0
+        
+        if subvention_data.get('depenses_temps_travail', 0):
+            temps_travail = data['temps_travail_total'] * subvention_data.get('cd', 1)
+            montant += subvention_data.get('coef_temps_travail', 1) * temps_travail
+        
+        if subvention_data.get('depenses_externes', 0):
+            montant += subvention_data.get('coef_externes', 1) * data['depenses_externes']
+        
+        if subvention_data.get('depenses_autres_achats', 0):
+            montant += subvention_data.get('coef_autres_achats', 1) * data['autres_achats']
+        
+        if subvention_data.get('depenses_dotation_amortissements', 0):
+            montant += subvention_data.get('coef_dotation_amortissements', 1) * data['amortissements']
+        
+        # Appliquer le taux de subvention
+        montant = montant * (subvention_data.get('taux', 100) / 100)
+        
+        return montant
+    
+    @staticmethod
+    def _calculate_total_eligible_expenses(cursor, project_id, subvention_data, debut_subv, fin_subv):
+        """Calcule les dépenses éligibles totales sur toute la période du projet (pas seulement la période de subvention)"""
+        # Il faut prendre TOUTES les dépenses éligibles du projet pour faire une répartition correcte
+        # Sinon on crée un biais si la période de subvention ne couvre qu'une partie du projet
+        
+        # Récupérer les dates du projet
+        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (project_id,))
+        projet_dates = cursor.fetchone()
+        if not projet_dates or not projet_dates[0] or not projet_dates[1]:
+            return 0
+            
+        try:
+            debut_projet = datetime.datetime.strptime(projet_dates[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_dates[1], '%m/%Y')
+        except ValueError:
+            return 0
+        
+        # Calculer les dépenses éligibles sur TOUTE la période du projet
+        return SubventionDialog._calculate_period_eligible_expenses_range(
+            cursor, project_id, subvention_data, debut_projet, fin_projet
+        )
+    
+    @staticmethod 
+    def _calculate_period_eligible_expenses(cursor, project_id, subvention_data, target_year, target_month):
+        """Calcule les dépenses éligibles pour une période spécifique"""
+        depenses_periode = 0
+        
+        # Condition de filtrage selon la période
+        if target_month:
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            where_condition_tt = "AND tt.annee = ? AND tt.mois = ?"
+            where_condition_dep = "AND annee = ? AND mois = ?"
+            params_tt = [project_id, target_year, month_names[target_month-1]]
+            params_dep = [project_id, target_year, month_names[target_month-1]]
+        else:
+            where_condition_tt = "AND tt.annee = ?"
+            where_condition_dep = "AND annee = ?"
+            params_tt = [project_id, target_year]
+            params_dep = [project_id, target_year]
+        
+        # Temps de travail si coché
+        if subvention_data.get('depenses_temps_travail', 0):
+            cursor.execute(f"""
+                SELECT SUM(tt.jours * cc.montant_charge)
+                FROM temps_travail tt
+                JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
+                WHERE tt.projet_id = ? {where_condition_tt}
+            """, params_tt)
+            
+            result = cursor.fetchone()
+            if result and result[0]:
+                # Appliquer les coefficients après le calcul brut
+                montant_brut = float(result[0])
+                montant_avec_cd = montant_brut * subvention_data.get('cd', 1)
+                montant_final = montant_avec_cd * subvention_data.get('coef_temps_travail', 1)
+                depenses_periode += montant_final
+        
+        # Dépenses externes si cochées
+        if subvention_data.get('depenses_externes', 0):
+            cursor.execute(f"""
+                SELECT SUM(montant)
+                FROM depenses 
+                WHERE projet_id = ? {where_condition_dep}
+            """, params_dep)
+            
+            result = cursor.fetchone()
+            if result and result[0]:
+                # Appliquer le coefficient après le calcul brut
+                montant_brut = float(result[0])
+                montant_final = montant_brut * subvention_data.get('coef_externes', 1)
+                depenses_periode += montant_final
+        
+        # Autres achats si cochés
+        if subvention_data.get('depenses_autres_achats', 0):
+            cursor.execute(f"""
+                SELECT SUM(montant)
+                FROM autres_depenses 
+                WHERE projet_id = ? {where_condition_dep}
+            """, params_dep)
+            
+            result = cursor.fetchone()
+            if result and result[0]:
+                # Appliquer le coefficient après le calcul brut
+                montant_brut = float(result[0])
+                montant_final = montant_brut * subvention_data.get('coef_autres_achats', 1)
+                depenses_periode += montant_final
+            
+            result = cursor.fetchone()
+            if result and result[0]:
+                depenses_periode += float(result[0])
+        
+        # Amortissements si cochés (calcul simplifié pour la période)
+        if subvention_data.get('depenses_dotation_amortissements', 0):
+            # Logique simplifiée : répartition équitable sur la durée
+            cursor.execute("""
+                SELECT SUM(montant) FROM investissements WHERE projet_id = ?
+            """, (project_id,))
+            
+            result = cursor.fetchone()
+            if result and result[0]:
+                # Approximation : diviser par le nombre total de mois puis multiplier par la période
+                amort_brut = float(result[0])
+                # Appliquer le coefficient après le calcul brut
+                amort_total = amort_brut * subvention_data.get('coef_dotation_amortissements', 1)
+                # Pour simplifier, on répartit de façon équitable
+                if target_month:
+                    # Pour un mois, prendre 1/12 de l'année
+                    cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (project_id,))
+                    projet_dates = cursor.fetchone()
+                    if projet_dates and projet_dates[0] and projet_dates[1]:
+                        try:
+                            debut = datetime.datetime.strptime(projet_dates[0], '%m/%Y')
+                            fin = datetime.datetime.strptime(projet_dates[1], '%m/%Y')
+                            nb_mois_total = (fin.year - debut.year) * 12 + (fin.month - debut.month) + 1
+                            if nb_mois_total > 0:
+                                depenses_periode += amort_total / nb_mois_total
+                        except ValueError:
+                            pass
+                else:
+                    # Pour une année, prendre la part annuelle
+                    depenses_periode += amort_total / 12  # Approximation simple
+        
+        return depenses_periode
+    
+    @staticmethod
+    def _calculate_period_eligible_expenses_range(cursor, project_id, subvention_data, debut_date, fin_date):
+        """Calcule les dépenses éligibles sur une plage de dates"""
+        # Pour simplifier, on fait la somme des mois dans la plage
+        total = 0
+        current_date = debut_date.replace(day=1)
+        
+        while current_date <= fin_date:
+            montant_mois = SubventionDialog._calculate_period_eligible_expenses(
+                cursor, project_id, subvention_data, current_date.year, current_date.month
+            )
+            total += montant_mois
+            
+            # Passer au mois suivant
+            if current_date.month == 12:
+                current_date = current_date.replace(year=current_date.year + 1, month=1)
+            else:
+                current_date = current_date.replace(month=current_date.month + 1)
+        
+        return total
+        
     def validate_and_accept(self):
         # Vérifier que le nom est renseigné
         nom = self.nom_edit.text().strip()
@@ -619,6 +957,8 @@ class SubventionDialog(QDialog):
     def get_data(self):
         return {
             'nom': self.nom_edit.text().strip(),
+            'date_debut_subvention': self.date_debut_subv.date().toString('MM/yyyy'),
+            'date_fin_subvention': self.date_fin_subv.date().toString('MM/yyyy'),
             'mode_simplifie': int(self.mode_simplifie_cb.isChecked()),
             'montant_forfaitaire': float(self.montant_forfaitaire_spin.value()),
             'depenses_temps_travail': int(self.cb_temps.isChecked()),
@@ -639,6 +979,30 @@ class SubventionDialog(QDialog):
         self.loading_data = True
         
         self.nom_edit.setText(data.get('nom', ''))
+        
+        # Charger les dates avec gestion des anciennes BDD
+        if 'date_debut_subvention' in data and data['date_debut_subvention']:
+            try:
+                debut_date = datetime.datetime.strptime(data['date_debut_subvention'], '%m/%Y')
+                self.date_debut_subv.setDate(QDate(debut_date.year, debut_date.month, 1))
+            except (ValueError, TypeError):
+                # Si erreur, utiliser les dates du projet par défaut
+                self.set_default_dates_from_project()
+        else:
+            # Anciennes BDD : utiliser les dates du projet
+            self.set_default_dates_from_project()
+            
+        if 'date_fin_subvention' in data and data['date_fin_subvention']:
+            try:
+                fin_date = datetime.datetime.strptime(data['date_fin_subvention'], '%m/%Y')
+                self.date_fin_subv.setDate(QDate(fin_date.year, fin_date.month, 1))
+            except (ValueError, TypeError):
+                # Si erreur, utiliser les dates du projet par défaut
+                self.set_default_dates_from_project()
+        else:
+            # Anciennes BDD : utiliser les dates du projet
+            self.set_default_dates_from_project()
+        
         self.mode_simplifie_cb.setChecked(bool(data.get('mode_simplifie', 0)))
         self.montant_forfaitaire_spin.setValue(float(data.get('montant_forfaitaire', 0)))
         self.cb_temps.setChecked(bool(data.get('depenses_temps_travail', 0)))
@@ -659,3 +1023,34 @@ class SubventionDialog(QDialog):
         
         # Désactiver le flag après le chargement
         self.loading_data = False
+        
+    def set_default_dates_from_project(self):
+        """Définit les dates de subvention par défaut à partir des dates du projet"""
+        if not self.projet_id:
+            return
+            
+        conn = sqlite3.connect('gestion_budget.db')
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+            result = cursor.fetchone()
+            
+            if result and result[0] and result[1]:
+                try:
+                    # Dates du projet au format MM/yyyy
+                    debut_projet = datetime.datetime.strptime(result[0], '%m/%Y')
+                    fin_projet = datetime.datetime.strptime(result[1], '%m/%Y')
+                    
+                    # Définir les dates de subvention = dates du projet
+                    self.date_debut_subv.setDate(QDate(debut_projet.year, debut_projet.month, 1))
+                    self.date_fin_subv.setDate(QDate(fin_projet.year, fin_projet.month, 1))
+                    
+                except ValueError:
+                    # Si erreur de format, garder les dates actuelles
+                    pass
+        except Exception:
+            # En cas d'erreur, garder les dates actuelles
+            pass
+        finally:
+            conn.close()

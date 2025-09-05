@@ -128,6 +128,17 @@ def init_db():
         cursor.execute('ALTER TABLE subventions ADD COLUMN montant_forfaitaire REAL DEFAULT 0')
     except sqlite3.OperationalError:
         pass  # La colonne existe déjà
+    
+    # Migration pour les champs de dates de subvention
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN date_debut_subvention TEXT')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN date_fin_subvention TEXT')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
@@ -1234,13 +1245,14 @@ class ProjectForm(QDialog):
                         (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                          depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
                          depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                         depenses_eligibles_max, montant_subvention_max) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         depenses_eligibles_max, montant_subvention_max, date_debut_subvention, date_fin_subvention) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                         (self.projet_id, data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
                          data['depenses_temps_travail'], data['coef_temps_travail'],
                          data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                          data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
-                         data['depenses_eligibles_max'], data['montant_subvention_max']))
+                         data['depenses_eligibles_max'], data['montant_subvention_max'], 
+                         data['date_debut_subvention'], data['date_fin_subvention']))
                 except sqlite3.OperationalError:
                     # Fallback pour les anciennes bases de données sans les nouvelles colonnes
                     cursor.execute('''INSERT INTO subventions 
@@ -1337,13 +1349,14 @@ class ProjectForm(QDialog):
                             nom=?, mode_simplifie=?, montant_forfaitaire=?, depenses_temps_travail=?, coef_temps_travail=?, 
                             depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
                             depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
-                            depenses_eligibles_max=?, montant_subvention_max=? 
+                            depenses_eligibles_max=?, montant_subvention_max=?, date_debut_subvention=?, date_fin_subvention=?
                             WHERE id=?''',
                             (data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
                              data['depenses_temps_travail'], data['coef_temps_travail'],
                              data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                              data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
-                             data['depenses_eligibles_max'], data['montant_subvention_max'], subv_id))
+                             data['depenses_eligibles_max'], data['montant_subvention_max'], 
+                             data['date_debut_subvention'], data['date_fin_subvention'], subv_id))
                     except sqlite3.OperationalError:
                         # Fallback pour les anciennes bases de données sans les nouvelles colonnes
                         cursor.execute('''UPDATE subventions SET 
@@ -1682,7 +1695,7 @@ class ProjectForm(QDialog):
         
         # Essayer d'abord avec les nouvelles colonnes, puis fallback sans elles
         try:
-            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max, mode_simplifie, montant_forfaitaire FROM subventions WHERE projet_id=?', (self.projet_id,))
+            cursor.execute('SELECT depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, nom, depenses_eligibles_max, montant_subvention_max, mode_simplifie, montant_forfaitaire, date_debut_subvention, date_fin_subvention FROM subventions WHERE projet_id=?', (self.projet_id,))
             for subv in cursor.fetchall():
                 data = {
                     'depenses_temps_travail': subv[0],
@@ -1699,7 +1712,9 @@ class ProjectForm(QDialog):
                     'depenses_eligibles_max': subv[11] if len(subv) > 11 else 0,
                     'montant_subvention_max': subv[12] if len(subv) > 12 else 0,
                     'mode_simplifie': subv[13] if len(subv) > 13 else 0,
-                    'montant_forfaitaire': subv[14] if len(subv) > 14 else 0
+                    'montant_forfaitaire': subv[14] if len(subv) > 14 else 0,
+                    'date_debut_subvention': subv[15] if len(subv) > 15 else None,
+                    'date_fin_subvention': subv[16] if len(subv) > 16 else None
                 }
                 self.subventions_data.append(data)
                 
@@ -1739,7 +1754,9 @@ class ProjectForm(QDialog):
                     'depenses_eligibles_max': 0,  # Valeur par défaut
                     'montant_subvention_max': 0,  # Valeur par défaut
                     'mode_simplifie': 0,          # Valeur par défaut
-                    'montant_forfaitaire': 0      # Valeur par défaut
+                    'montant_forfaitaire': 0,     # Valeur par défaut
+                    'date_debut_subvention': None,  # Valeur par défaut
+                    'date_fin_subvention': None     # Valeur par défaut
                 }
                 self.subventions_data.append(data)
                 cats = []
