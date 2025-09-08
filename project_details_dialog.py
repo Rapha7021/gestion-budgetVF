@@ -893,6 +893,19 @@ class ProjectDetailsDialog(QDialog):
 
             # Calcul et affichage des subventions
             self.refresh_subventions()
+            
+            # Afficher le CIR même s'il n'y a pas de subventions
+            if self.has_cir_activated():
+                # Vérifier si refresh_cir n'a pas déjà été appelé dans refresh_subventions
+                has_subventions = False
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT COUNT(*) FROM subventions WHERE projet_id = ?', (self.projet_id,))
+                    has_subventions = cursor.fetchone()[0] > 0
+                
+                if not has_subventions:
+                    # Pas de subventions, mais CIR activé : afficher le CIR avec total_subventions = 0
+                    self.refresh_cir(0)
 
     def refresh_subventions(self):
         """Affiche les montants des subventions sous forme de tableau (utilise les montants précalculés)"""

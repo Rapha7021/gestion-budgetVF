@@ -1671,10 +1671,21 @@ class CompteResultatDisplay(QDialog):
         Calcule les amortissements pour une période donnée selon la règle :
         - Amortissement mensuel = montant total / (durée amortissement × 12)
         - Début d'amortissement = mois suivant le mois d'achat
+        - CORRECTION: Respecte les dates de début et fin du projet
         """
         import datetime
         
         try:
+            # Récupérer les dates du projet
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+            projet_info = cursor.fetchone()
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+            
+            # Convertir les dates du projet
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
             # Récupérer tous les investissements du projet
             cursor.execute('''
                 SELECT montant, date_achat, duree 
@@ -1689,52 +1700,48 @@ class CompteResultatDisplay(QDialog):
                     # Convertir la date d'achat (format 'MM/YYYY')
                     achat_date = datetime.datetime.strptime(date_achat, '%m/%Y')
                     
-                    # Calculer l'amortissement mensuel
-                    amortissement_mensuel = float(montant_inv) / (int(duree) * 12)
+                    # La dotation commence le mois suivant l'achat (comme dans project_details_dialog.py)
+                    debut_amort = achat_date.replace(day=1)
+                    debut_amort = datetime.datetime(debut_amort.year, debut_amort.month, 1) + datetime.timedelta(days=32)
+                    debut_amort = debut_amort.replace(day=1)
                     
-                    # Le premier mois d'amortissement = mois suivant l'achat
-                    if achat_date.month == 12:
-                        premier_mois_amort = datetime.datetime(achat_date.year + 1, 1, 1)
-                    else:
-                        premier_mois_amort = datetime.datetime(achat_date.year, achat_date.month + 1, 1)
+                    # La fin de l'amortissement est soit la fin du projet, soit la fin de la période d'amortissement
+                    fin_amort = achat_date.replace(day=1)
+                    # Ajouter durée années à la date d'achat
+                    fin_amort = datetime.datetime(fin_amort.year + int(duree), fin_amort.month, 1)
                     
-                    # Le dernier mois d'amortissement
-                    mois_restants = int(duree) * 12
-                    dernier_mois_amort = premier_mois_amort
-                    for _ in range(mois_restants - 1):
-                        if dernier_mois_amort.month == 12:
-                            dernier_mois_amort = datetime.datetime(dernier_mois_amort.year + 1, 1, 1)
-                        else:
-                            dernier_mois_amort = datetime.datetime(dernier_mois_amort.year, dernier_mois_amort.month + 1, 1)
+                    # Prendre la date la plus proche entre fin du projet et fin d'amortissement
+                    fin_effective = min(fin_projet, fin_amort)
+                    
+                    # Si le début d'amortissement est après la fin du projet, pas d'amortissement
+                    if debut_amort > fin_projet:
+                        continue
+                    
+                    # Calculer la dotation mensuelle (montant / durée en mois)
+                    dotation_mensuelle = float(montant_inv) / (int(duree) * 12)
                     
                     if month:
                         # Calcul pour un mois spécifique
                         mois_demande = datetime.datetime(year, month, 1)
                         
-                        # Vérifier si ce mois tombe dans la période d'amortissement
-                        if premier_mois_amort <= mois_demande <= dernier_mois_amort:
-                            amortissements_total += amortissement_mensuel
+                        # Vérifier si ce mois tombe dans la période d'amortissement ET dans le projet
+                        if debut_amort <= mois_demande <= fin_effective:
+                            amortissements_total += dotation_mensuelle
                     
                     else:
                         # Calcul pour une année complète
+                        # Calculer le nombre de mois d'amortissement effectif dans cette année
                         debut_annee = datetime.datetime(year, 1, 1)
-                        fin_annee = datetime.datetime(year, 12, 1)
+                        fin_annee = datetime.datetime(year, 12, 31)
                         
-                        # Compter les mois d'amortissement qui tombent dans cette année
-                        mois_amort_annee = 0
-                        mois_courant = premier_mois_amort
+                        # Intersection entre [début_amort, fin_effective] et [début_annee, fin_annee]
+                        debut_periode = max(debut_amort, debut_annee)
+                        fin_periode = min(fin_effective, fin_annee)
                         
-                        while mois_courant <= dernier_mois_amort:
-                            if debut_annee <= mois_courant <= fin_annee:
-                                mois_amort_annee += 1
-                            
-                            # Passer au mois suivant
-                            if mois_courant.month == 12:
-                                mois_courant = datetime.datetime(mois_courant.year + 1, 1, 1)
-                            else:
-                                mois_courant = datetime.datetime(mois_courant.year, mois_courant.month + 1, 1)
-                        
-                        amortissements_total += amortissement_mensuel * mois_amort_annee
+                        if debut_periode <= fin_periode:
+                            # Calculer le nombre de mois dans cette intersection
+                            mois_amort_annee = (fin_periode.year - debut_periode.year) * 12 + fin_periode.month - debut_periode.month + 1
+                            amortissements_total += dotation_mensuelle * mois_amort_annee
                 
                 except (ValueError, TypeError) as e:
                     continue
