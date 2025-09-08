@@ -643,8 +643,12 @@ class BudgetEditDialog(QDialog):
                         conn.close()
             btn_delete_row.clicked.connect(delete_row)
 
-            # Charge les données depuis la base de données
-            self.load_recettes_data_from_db_for_year(year, table)
+            # Restaure les données depuis la mémoire si elles existent
+            self.restore_recettes_table_from_memory(year, table)
+            
+            # Si pas de données en mémoire, charge depuis la base de données
+            if year not in self.recettes_data or not self.recettes_data[year]:
+                self.load_recettes_data_from_db_for_year(year, table)
 
             # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
@@ -875,8 +879,12 @@ class BudgetEditDialog(QDialog):
                         conn.close()
             btn_delete_row.clicked.connect(delete_row)
 
-            # Charge les données depuis la base de données
-            self.load_depenses_data_from_db_for_year(year, table)
+            # Restaure les données depuis la mémoire si elles existent
+            self.restore_depenses_table_from_memory(year, table)
+            
+            # Si pas de données en mémoire, charge depuis la base de données
+            if year not in self.depenses_data or not self.depenses_data[year]:
+                self.load_depenses_data_from_db_for_year(year, table)
 
             # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
@@ -1100,8 +1108,12 @@ class BudgetEditDialog(QDialog):
                         conn.close()
             btn_delete_row.clicked.connect(delete_row)
 
-            # Charge les données depuis la base de données
-            self.load_autres_depenses_data_from_db_for_year(year, table)
+            # Restaure les données depuis la mémoire si elles existent
+            self.restore_autres_depenses_table_from_memory(year, table)
+            
+            # Si pas de données en mémoire, charge depuis la base de données
+            if year not in self.autres_depenses_data or not self.autres_depenses_data[year]:
+                self.load_autres_depenses_data_from_db_for_year(year, table)
 
             # Validation des montants
             double_validator = QDoubleValidator(0.0, 9999999.99, 2)
@@ -1547,11 +1559,233 @@ class BudgetEditDialog(QDialog):
                                         'categorie': categorie,
                                         'membre_id': membre_id
                                     }
+                                    found = True
                                     break
+                        
+                        if found:
                             break
                 
-                # Sauvegarde les données en mémoire
+                # Sauvegarde les données mises à jour
                 if data:
                     self.budget_data[year] = data
         
         conn.close()
+
+    def restore_recettes_table_from_memory(self, year, table):
+        """Restaure les valeurs du tableau recettes à partir de la mémoire pour l'année donnée"""
+        data = self.recettes_data.get(year, {})
+        if not data:
+            return
+        
+        # Obtenir la fonction get_months_for_year depuis la portée locale
+        mois_fr = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+        
+        def get_months_for_year_local(year):
+            if not self.date_debut or not self.date_fin:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            import re
+            def extract_ym(date_str):
+                date_str = str(date_str).strip()
+                match = re.search(r'(\d{1,2})[/-](\d{4})', date_str)
+                if match:
+                    return int(match.group(2)), int(match.group(1))
+                match = re.search(r'(\d{4})[/-](\d{1,2})', date_str)
+                if match:
+                    return int(match.group(1)), int(match.group(2))
+                return None, None
+            
+            y_start, m_start = extract_ym(self.date_debut)
+            y_end, m_end = extract_ym(self.date_fin)
+            year = int(year)
+            
+            if y_start is None or y_end is None:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            if year == y_start and year == y_end:
+                months = [(m, mois_fr[m]) for m in range(m_start, m_end + 1)]
+            elif year == y_start:
+                months = [(m, mois_fr[m]) for m in range(m_start, 13)]
+            elif year == y_end:
+                months = [(m, mois_fr[m]) for m in range(1, m_end + 1)]
+            elif y_start < year < y_end:
+                months = [(m, mois_fr[m]) for m in range(1, 13)]
+            else:
+                months = []
+            
+            return months
+        
+        # Restaurer les données
+        for (ligne_index, mois), (montant, detail) in data.items():
+            row = table.rowCount()
+            table.insertRow(row)
+            
+            # Colonne Montant
+            montant_item = QTableWidgetItem(str(montant) if montant else "")
+            table.setItem(row, 0, montant_item)
+            
+            # Colonne Détail  
+            detail_item = QTableWidgetItem(detail if detail else "")
+            table.setItem(row, 1, detail_item)
+            
+            # Colonne Mois (ComboBox)
+            from PyQt6.QtWidgets import QComboBox
+            mois_combo = QComboBox()
+            months = get_months_for_year_local(year)
+            mois_items = [""]
+            for _, mois_nom in months:
+                mois_items.append(mois_nom)
+            mois_combo.addItems(mois_items)
+            if mois:
+                index = mois_combo.findText(mois)
+                if index >= 0:
+                    mois_combo.setCurrentIndex(index)
+            mois_combo.currentTextChanged.connect(lambda: self.recettes_modified_years.add(year))
+            table.setCellWidget(row, 2, mois_combo)
+
+    def restore_depenses_table_from_memory(self, year, table):
+        """Restaure les valeurs du tableau dépenses à partir de la mémoire pour l'année donnée"""
+        data = self.depenses_data.get(year, {})
+        if not data:
+            return
+        
+        # Obtenir la fonction get_months_for_year depuis la portée locale
+        mois_fr = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+        
+        def get_months_for_year_local(year):
+            if not self.date_debut or not self.date_fin:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            import re
+            def extract_ym(date_str):
+                date_str = str(date_str).strip()
+                match = re.search(r'(\d{1,2})[/-](\d{4})', date_str)
+                if match:
+                    return int(match.group(2)), int(match.group(1))
+                match = re.search(r'(\d{4})[/-](\d{1,2})', date_str)
+                if match:
+                    return int(match.group(1)), int(match.group(2))
+                return None, None
+            
+            y_start, m_start = extract_ym(self.date_debut)
+            y_end, m_end = extract_ym(self.date_fin)
+            year = int(year)
+            
+            if y_start is None or y_end is None:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            if year == y_start and year == y_end:
+                months = [(m, mois_fr[m]) for m in range(m_start, m_end + 1)]
+            elif year == y_start:
+                months = [(m, mois_fr[m]) for m in range(m_start, 13)]
+            elif year == y_end:
+                months = [(m, mois_fr[m]) for m in range(1, m_end + 1)]
+            elif y_start < year < y_end:
+                months = [(m, mois_fr[m]) for m in range(1, 13)]
+            else:
+                months = []
+            
+            return months
+        
+        # Restaurer les données
+        for (categorie, mois), (montant, detail) in data.items():
+            row = table.rowCount()
+            table.insertRow(row)
+            
+            # Colonne Montant
+            montant_item = QTableWidgetItem(str(montant) if montant else "")
+            table.setItem(row, 0, montant_item)
+            
+            # Colonne Détail  
+            detail_item = QTableWidgetItem(detail if detail else "")
+            table.setItem(row, 1, detail_item)
+            
+            # Colonne Mois (ComboBox)
+            from PyQt6.QtWidgets import QComboBox
+            mois_combo = QComboBox()
+            months = get_months_for_year_local(year)
+            mois_items = [""]
+            for _, mois_nom in months:
+                mois_items.append(mois_nom)
+            mois_combo.addItems(mois_items)
+            if mois:
+                index = mois_combo.findText(mois)
+                if index >= 0:
+                    mois_combo.setCurrentIndex(index)
+            mois_combo.currentTextChanged.connect(lambda: self.depenses_modified_years.add(year))
+            table.setCellWidget(row, 2, mois_combo)
+
+    def restore_autres_depenses_table_from_memory(self, year, table):
+        """Restaure les valeurs du tableau autres dépenses à partir de la mémoire pour l'année donnée"""
+        data = self.autres_depenses_data.get(year, {})
+        if not data:
+            return
+        
+        # Obtenir la fonction get_months_for_year depuis la portée locale
+        mois_fr = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+        
+        def get_months_for_year_local(year):
+            if not self.date_debut or not self.date_fin:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            import re
+            def extract_ym(date_str):
+                date_str = str(date_str).strip()
+                match = re.search(r'(\d{1,2})[/-](\d{4})', date_str)
+                if match:
+                    return int(match.group(2)), int(match.group(1))
+                match = re.search(r'(\d{4})[/-](\d{1,2})', date_str)
+                if match:
+                    return int(match.group(1)), int(match.group(2))
+                return None, None
+            
+            y_start, m_start = extract_ym(self.date_debut)
+            y_end, m_end = extract_ym(self.date_fin)
+            year = int(year)
+            
+            if y_start is None or y_end is None:
+                return [(m, mois_fr[m]) for m in range(1, 13)]
+            
+            if year == y_start and year == y_end:
+                months = [(m, mois_fr[m]) for m in range(m_start, m_end + 1)]
+            elif year == y_start:
+                months = [(m, mois_fr[m]) for m in range(m_start, 13)]
+            elif year == y_end:
+                months = [(m, mois_fr[m]) for m in range(1, m_end + 1)]
+            elif y_start < year < y_end:
+                months = [(m, mois_fr[m]) for m in range(1, 13)]
+            else:
+                months = []
+            
+            return months
+        
+        # Restaurer les données
+        for (ligne_index, mois), (montant, detail) in data.items():
+            row = table.rowCount()
+            table.insertRow(row)
+            
+            # Colonne Montant
+            montant_item = QTableWidgetItem(str(montant) if montant else "")
+            table.setItem(row, 0, montant_item)
+            
+            # Colonne Détail  
+            detail_item = QTableWidgetItem(detail if detail else "")
+            table.setItem(row, 1, detail_item)
+            
+            # Colonne Mois (ComboBox)
+            from PyQt6.QtWidgets import QComboBox
+            mois_combo = QComboBox()
+            months = get_months_for_year_local(year)
+            mois_items = [""]
+            for _, mois_nom in months:
+                mois_items.append(mois_nom)
+            mois_combo.addItems(mois_items)
+            if mois:
+                index = mois_combo.findText(mois)
+                if index >= 0:
+                    mois_combo.setCurrentIndex(index)
+            mois_combo.currentTextChanged.connect(lambda: self.autres_depenses_modified_years.add(year))
+            table.setCellWidget(row, 2, mois_combo)

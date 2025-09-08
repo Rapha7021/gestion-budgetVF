@@ -208,6 +208,12 @@ class SubventionDialog(QDialog):
         
         # Mettre à jour le taux calculé quand le montant forfaitaire change
         self.montant_forfaitaire_spin.valueChanged.connect(self.update_taux_calcule)
+        
+        # Mettre à jour l'assiette et montant quand les dates de subvention changent
+        self.date_debut_subv.dateChanged.connect(self.update_montant)
+        self.date_debut_subv.dateChanged.connect(self.update_assiette)
+        self.date_fin_subv.dateChanged.connect(self.update_montant)
+        self.date_fin_subv.dateChanged.connect(self.update_assiette)
 
         # Flag pour éviter les confirmations lors du chargement des données
         self.loading_data = False
@@ -324,7 +330,7 @@ class SubventionDialog(QDialog):
                 'autres_achats': 0,
                 'amortissements': 0
             }
-            
+         
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
         
@@ -358,34 +364,97 @@ class SubventionDialog(QDialog):
                 'amortissements': 0
             }
         
-        # Construire les données de subvention pour utiliser la méthode existante
-        subvention_data = {
-            'depenses_temps_travail': 1,
-            'coef_temps_travail': 1.0,
-            'depenses_externes': 1,
-            'coef_externes': 1.0,
-            'depenses_autres_achats': 1,
-            'coef_autres_achats': 1.0,
-            'depenses_dotation_amortissements': 1,
-            'coef_dotation_amortissements': 1.0,
-            'cd': 1.0,
-            'taux': 100.0,  # 100% pour récupérer les montants bruts
-            'date_debut_subvention': date_debut_subv,
-            'date_fin_subvention': date_fin_subv
-        }
+        # Récupérer les vraies données détaillées du projet pour la période de subvention UNIQUEMENT
+        temps_travail_total = 0
+        depenses_externes = 0
+        autres_achats = 0
+        amortissements = 0
         
-        # Utiliser la méthode existante pour calculer sur la période de subvention
-        total_eligible = SubventionDialog._calculate_period_eligible_expenses_range(
-            cursor, self.projet_id, subvention_data, debut_subv, fin_subv
-        )
+        # Fonction helper pour vérifier si un mois/année est dans la période de subvention
+        def is_in_subvention_period(annee, mois):
+            try:
+                # Convertir le mois français en numéro
+                mois_mapping = {
+                    'Janvier': 1, 'Février': 2, 'Mars': 3, 'Avril': 4, 'Mai': 5, 'Juin': 6,
+                    'Juillet': 7, 'Août': 8, 'Septembre': 9, 'Octobre': 10, 'Novembre': 11, 'Décembre': 12
+                }
+                if mois not in mois_mapping:
+                    return False
+                    
+                mois_num = mois_mapping[mois]
+                date_entry = datetime.datetime(int(annee), mois_num, 1)
+                
+                # Vérifier si cette date est dans la période de subvention
+                return debut_subv <= date_entry <= fin_subv
+            except:
+                return False
         
-        # Pour l'affichage, on répartit approximativement les totaux
-        # (cette méthode est utilisée pour l'aperçu, la précision n'est pas critique)
+        # Temps de travail avec valorisation pour la période de subvention
+        cursor.execute("""
+            SELECT tt.annee, tt.mois, tt.jours, cc.montant_charge
+            FROM temps_travail tt
+            JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
+            WHERE tt.projet_id = ?
+        """, (self.projet_id,))
+        temps_results = cursor.fetchall()
+        
+        for annee, mois, jours, montant_charge in temps_results:
+            if is_in_subvention_period(annee, mois):
+                temps_travail_total += jours * montant_charge
+        
+        # Dépenses externes pour la période de subvention
+        cursor.execute("""
+            SELECT annee, mois, montant
+            FROM depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        depenses_results = cursor.fetchall()
+        
+        for annee, mois, montant in depenses_results:
+            if is_in_subvention_period(annee, mois):
+                depenses_externes += montant
+        
+        # Autres achats (autres dépenses) pour la période de subvention
+        cursor.execute("""
+            SELECT annee, mois, montant
+            FROM autres_depenses 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        autres_results = cursor.fetchall()
+        
+        for annee, mois, montant in autres_results:
+            if is_in_subvention_period(annee, mois):
+                autres_achats += montant
+        
+        # Amortissements (investissements) pour la période de subvention
+        # Note: Les investissements n'ont pas de répartition mensuelle, on les répartit sur toute la durée du projet
+        cursor.execute("""
+            SELECT montant, date_achat, duree
+            FROM investissements 
+            WHERE projet_id = ?
+        """, (self.projet_id,))
+        invest_results = cursor.fetchall()
+        
+        # Pour les investissements, on calcule une répartition mensuelle sur la durée du projet
+        # et on ne prend que la part qui correspond à la période de subvention
+        if invest_results:
+            # Calculer la durée totale du projet en mois
+            try:
+                duree_projet_mois = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
+                if duree_projet_mois > 0:
+                    for montant, date_achat, duree in invest_results:
+                        if montant:
+                            # Répartir l'investissement sur la période de subvention
+                            # (simplification : on considère que l'amortissement se fait sur la période de subvention)
+                            amortissements += float(montant)
+            except:
+                pass
+        
         data = {
-            'temps_travail_total': total_eligible * 0.7,  # Approximation : 70% temps de travail
-            'depenses_externes': total_eligible * 0.2,    # 20% dépenses externes  
-            'autres_achats': total_eligible * 0.05,       # 5% autres achats
-            'amortissements': total_eligible * 0.05       # 5% amortissements
+            'temps_travail_total': temps_travail_total,
+            'depenses_externes': depenses_externes,
+            'autres_achats': autres_achats,
+            'amortissements': amortissements
         }
         
         conn.close()
@@ -431,45 +500,26 @@ class SubventionDialog(QDialog):
         if self.cb_dotation.isChecked():
             montant += self.spin_dotation.value() * projet_data['amortissements']
         
-        # Appliquer le taux de subvention
-        montant = montant * (self.taux_spin.value() / 100)
-        
-        # Créer une chaîne avec le détail du calcul pour l'infobulle
-        detail_lines = []
-        sub_total = 0
-        
-        # N'ajouter chaque composante que si elle est cochée
+        # Calculer l'assiette éligible pour l'infobulle
+        assiette_eligible = 0
         if self.cb_temps.isChecked():
             temps_travail = projet_data['temps_travail_total'] * self.cd_spin.value()
-            montant_temps = temps_travail * self.spin_temps.value()
-            detail_lines.append(f"Temps de travail: {format_montant(projet_data['temps_travail_total'])} x {self.cd_spin.value():.2f} x {self.spin_temps.value():.2f} = {format_montant(montant_temps)}")
-            sub_total += montant_temps
-            
+            assiette_eligible += self.spin_temps.value() * temps_travail
         if self.cb_externes.isChecked():
-            montant_externes = projet_data['depenses_externes'] * self.spin_externes.value()
-            detail_lines.append(f"Dépenses externes: {format_montant(projet_data['depenses_externes'])} x {self.spin_externes.value():.2f} = {format_montant(montant_externes)}")
-            sub_total += montant_externes
-            
+            assiette_eligible += self.spin_externes.value() * projet_data['depenses_externes']
         if self.cb_autres.isChecked():
-            montant_autres = projet_data['autres_achats'] * self.spin_autres.value()
-            detail_lines.append(f"Autres achats: {format_montant(projet_data['autres_achats'])} x {self.spin_autres.value():.2f} = {format_montant(montant_autres)}")
-            sub_total += montant_autres
-            
+            assiette_eligible += self.spin_autres.value() * projet_data['autres_achats']
         if self.cb_dotation.isChecked():
-            montant_amort = projet_data['amortissements'] * self.spin_dotation.value()
-            detail_lines.append(f"Amortissements: {format_montant(projet_data['amortissements'])} x {self.spin_dotation.value():.2f} = {format_montant(montant_amort)}")
-            sub_total += montant_amort
+            assiette_eligible += self.spin_dotation.value() * projet_data['amortissements']
         
-        # Ajouter la ligne de sous-total et le calcul final
-        detail_lines.append(f"Sous-total: {format_montant(sub_total)} x {self.taux_spin.value():.0f}% = {format_montant(montant)}")
-        
-        # Joindre toutes les lignes en une seule chaîne
-        detail_text = "\n".join(detail_lines)
+        # Appliquer le taux de subvention
+        montant = assiette_eligible * (self.taux_spin.value() / 100)
         
         # Mettre à jour le label avec formatage du montant
         self.montant_label.setText(format_montant(montant))
         
-        # Ajouter une infobulle pour voir le détail du calcul
+        # Infobulle simplifiée : Assiette éligible x Taux = Montant
+        detail_text = f"Assiette éligible: {format_montant(assiette_eligible)} × {self.taux_spin.value():.0f}% = {format_montant(montant)}"
         self.montant_label.setToolTip(detail_text)
         
     def update_taux_calcule(self):
@@ -511,21 +561,54 @@ class SubventionDialog(QDialog):
                        projet_data['depenses_externes'] + 
                        projet_data['autres_achats'] + 
                        projet_data['amortissements'])
+            
+            # Créer l'infobulle pour le mode simplifié
+            detail_assiette = []
+            detail_assiette.append(f"Temps de travail: {format_montant(projet_data['temps_travail_total'])}")
+            detail_assiette.append(f"Dépenses externes: {format_montant(projet_data['depenses_externes'])}")
+            detail_assiette.append(f"Autres achats: {format_montant(projet_data['autres_achats'])}")
+            detail_assiette.append(f"Amortissements: {format_montant(projet_data['amortissements'])}")
+            detail_assiette.append(f"TOTAL: {format_montant(assiette)}")
+            
+            detail_text = "\n".join(detail_assiette)
+            self.assiette_label.setToolTip(f"Détail de l'assiette éligible:\n{detail_text}")
+            
             # Mettre à jour aussi le taux calculé
             self.update_taux_calcule()
         else:
             # Mode détaillé : calcul avec les coefficients comme avant
             assiette = 0
+            detail_assiette = []
+            
             if self.cb_temps.isChecked():
                 # Appliquer le coefficient de charge au temps de travail, comme dans update_montant()
                 temps_travail_avec_cd = projet_data['temps_travail_total'] * self.cd_spin.value()
-                assiette += self.spin_temps.value() * temps_travail_avec_cd
+                temps_eligible = self.spin_temps.value() * temps_travail_avec_cd
+                assiette += temps_eligible
+                detail_assiette.append(f"Temps de travail: {format_montant(projet_data['temps_travail_total'])} × {self.cd_spin.value():.2f} × {self.spin_temps.value():.2f} = {format_montant(temps_eligible)}")
+            
             if self.cb_externes.isChecked():
-                assiette += self.spin_externes.value() * projet_data['depenses_externes']
+                externes_eligible = self.spin_externes.value() * projet_data['depenses_externes']
+                assiette += externes_eligible
+                detail_assiette.append(f"Dépenses externes: {format_montant(projet_data['depenses_externes'])} × {self.spin_externes.value():.2f} = {format_montant(externes_eligible)}")
+            
             if self.cb_autres.isChecked():
-                assiette += self.spin_autres.value() * projet_data['autres_achats']
+                autres_eligible = self.spin_autres.value() * projet_data['autres_achats']
+                assiette += autres_eligible
+                detail_assiette.append(f"Autres achats: {format_montant(projet_data['autres_achats'])} × {self.spin_autres.value():.2f} = {format_montant(autres_eligible)}")
+            
             if self.cb_dotation.isChecked():
-                assiette += self.spin_dotation.value() * projet_data['amortissements']
+                amort_eligible = self.spin_dotation.value() * projet_data['amortissements']
+                assiette += amort_eligible
+                detail_assiette.append(f"Amortissements: {format_montant(projet_data['amortissements'])} × {self.spin_dotation.value():.2f} = {format_montant(amort_eligible)}")
+            
+            # Ajouter le total
+            if detail_assiette:
+                detail_assiette.append(f"TOTAL ASSIETTE: {format_montant(assiette)}")
+                detail_text = "\n".join(detail_assiette)
+                self.assiette_label.setToolTip(f"Détail du calcul d'assiette éligible:\n{detail_text}")
+            else:
+                self.assiette_label.setToolTip("Aucune catégorie de dépenses sélectionnée")
         
         self.assiette_label.setText(format_montant(assiette))
         
