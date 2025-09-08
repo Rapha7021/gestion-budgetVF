@@ -969,7 +969,90 @@ class SubventionDialog(QDialog):
                 return
                 
         self.accept()
+    
+    def calculate_current_montant_estime(self):
+        """Calcule le montant estimé actuel basé sur l'affichage de l'interface"""
+        try:
+            # Récupérer le montant affiché dans l'interface (en supprimant "€" et les espaces)
+            montant_text = self.montant_label.text().replace('€', '').replace(' ', '').replace(',', '.')
+            
+            # Si c'est vide ou contient des caractères non numériques, retourner 0
+            if not montant_text or montant_text == '0':
+                return 0.0
+            
+            # Convertir en float
+            return float(montant_text)
+            
+        except (ValueError, AttributeError):
+            # En cas d'erreur, retourner 0
+            return 0.0
+    
+    def calculate_current_assiette_eligible(self):
+        """Calcule l'assiette éligible totale basée sur les paramètres actuels de l'interface"""
+        try:
+            # Si on est en mode simplifié, l'assiette éligible n'est pas pertinente
+            if self.mode_simplifie_cb.isChecked():
+                return 0.0
+            
+            # Utiliser la même logique que get_project_data() pour avoir la même période
+            projet_data = self.get_project_data()
+            
+            # Calculer l'assiette éligible selon les critères sélectionnés
+            assiette_eligible = 0
+            
+            if self.cb_temps.isChecked():
+                temps_eligible = projet_data['temps_travail_total'] * self.cd_spin.value()
+                assiette_eligible += self.spin_temps.value() * temps_eligible
+                
+            if self.cb_externes.isChecked():
+                assiette_eligible += self.spin_externes.value() * projet_data['depenses_externes']
+                
+            if self.cb_autres.isChecked():
+                assiette_eligible += self.spin_autres.value() * projet_data['autres_achats']
+                
+            if self.cb_dotation.isChecked():
+                assiette_eligible += self.spin_dotation.value() * projet_data['amortissements']
+            
+            return assiette_eligible
+                
+        except (ValueError, AttributeError, Exception) as e:
+            # En cas d'erreur, retourner 0
+            return 0.0
+    
+    def get_data_for_calculation(self):
+        """Récupère les données actuelles pour les calculs"""
+        return {
+            'mode_simplifie': int(self.mode_simplifie_cb.isChecked()),
+            'montant_forfaitaire': float(self.montant_forfaitaire_spin.value()),
+            'depenses_temps_travail': int(self.cb_temps.isChecked()),
+            'coef_temps_travail': float(self.spin_temps.value()),
+            'depenses_externes': int(self.cb_externes.isChecked()),
+            'coef_externes': float(self.spin_externes.value()),
+            'depenses_autres_achats': int(self.cb_autres.isChecked()),
+            'coef_autres_achats': float(self.spin_autres.value()),
+            'depenses_dotation_amortissements': int(self.cb_dotation.isChecked()),
+            'coef_dotation_amortissements': float(self.spin_dotation.value()),
+            'cd': float(self.cd_spin.value()),
+            'taux': float(self.taux_spin.value())
+        }
+    
+    def get_debut_subvention(self):
+        """Récupère la date de début de subvention"""
+        return self.date_debut_subv.date().toString('MM/yyyy')
+    
+    def get_fin_subvention(self):
+        """Récupère la date de fin de subvention"""
+        return self.date_fin_subv.date().toString('MM/yyyy')
+    
     def get_data(self):
+        # Calculer le montant estimé et l'assiette éligible actuels
+        montant_estime = self.calculate_current_montant_estime()
+        assiette_eligible = self.calculate_current_assiette_eligible()
+        
+        # Obtenir la date actuelle
+        from datetime import datetime
+        date_maj = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         return {
             'nom': self.nom_edit.text().strip(),
             'date_debut_subvention': self.date_debut_subv.date().toString('MM/yyyy'),
@@ -987,7 +1070,10 @@ class SubventionDialog(QDialog):
             'cd': float(self.cd_spin.value()),
             'taux': float(self.taux_spin.value()),
             'depenses_eligibles_max': float(self.depenses_max_spin.value()),
-            'montant_subvention_max': float(self.subvention_max_spin.value())
+            'montant_subvention_max': float(self.subvention_max_spin.value()),
+            'assiette_eligible': assiette_eligible,
+            'montant_estime_total': montant_estime,
+            'date_derniere_maj': date_maj
         }
     def load_data(self, data):
         # Activer le flag pour éviter les confirmations lors du chargement

@@ -139,6 +139,22 @@ def init_db():
         cursor.execute('ALTER TABLE subventions ADD COLUMN date_fin_subvention TEXT')
     except sqlite3.OperationalError:
         pass  # La colonne existe déjà
+    
+    # Migration pour les champs de cache des calculs de subvention
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN assiette_eligible REAL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_estime_total REAL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
+    
+    try:
+        cursor.execute('ALTER TABLE subventions ADD COLUMN date_derniere_maj TEXT')
+    except sqlite3.OperationalError:
+        pass  # La colonne existe déjà
     cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         projet_id INTEGER,
@@ -1245,14 +1261,16 @@ class ProjectForm(QDialog):
                         (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                          depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
                          depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                         depenses_eligibles_max, montant_subvention_max, date_debut_subvention, date_fin_subvention) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         depenses_eligibles_max, montant_subvention_max, date_debut_subvention, date_fin_subvention,
+                         assiette_eligible, montant_estime_total, date_derniere_maj) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                         (self.projet_id, data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
                          data['depenses_temps_travail'], data['coef_temps_travail'],
                          data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                          data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
                          data['depenses_eligibles_max'], data['montant_subvention_max'], 
-                         data['date_debut_subvention'], data['date_fin_subvention']))
+                         data['date_debut_subvention'], data['date_fin_subvention'],
+                         data.get('assiette_eligible', 0), data.get('montant_estime_total', 0), data.get('date_derniere_maj', '')))
                 except sqlite3.OperationalError:
                     # Fallback pour les anciennes bases de données sans les nouvelles colonnes
                     cursor.execute('''INSERT INTO subventions 
@@ -1349,14 +1367,16 @@ class ProjectForm(QDialog):
                             nom=?, mode_simplifie=?, montant_forfaitaire=?, depenses_temps_travail=?, coef_temps_travail=?, 
                             depenses_externes=?, coef_externes=?, depenses_autres_achats=?, coef_autres_achats=?, 
                             depenses_dotation_amortissements=?, coef_dotation_amortissements=?, cd=?, taux=?,
-                            depenses_eligibles_max=?, montant_subvention_max=?, date_debut_subvention=?, date_fin_subvention=?
+                            depenses_eligibles_max=?, montant_subvention_max=?, date_debut_subvention=?, date_fin_subvention=?,
+                            assiette_eligible=?, montant_estime_total=?, date_derniere_maj=?
                             WHERE id=?''',
                             (data['nom'], data['mode_simplifie'], data['montant_forfaitaire'],
                              data['depenses_temps_travail'], data['coef_temps_travail'],
                              data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'],
                              data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'],
                              data['depenses_eligibles_max'], data['montant_subvention_max'], 
-                             data['date_debut_subvention'], data['date_fin_subvention'], subv_id))
+                             data['date_debut_subvention'], data['date_fin_subvention'],
+                             data.get('assiette_eligible', 0), data.get('montant_estime_total', 0), data.get('date_derniere_maj', ''), subv_id))
                     except sqlite3.OperationalError:
                         # Fallback pour les anciennes bases de données sans les nouvelles colonnes
                         cursor.execute('''UPDATE subventions SET 
@@ -1601,9 +1621,9 @@ class ProjectForm(QDialog):
         # Sauvegarde des subventions
         cursor.execute('DELETE FROM subventions WHERE projet_id=?', (projet_id,))
         for data in self.subventions_data:
-            cursor.execute('''INSERT INTO subventions (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, depenses_eligibles_max, montant_subvention_max) 
-                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (projet_id, data['nom'], data.get('mode_simplifie', 0), data.get('montant_forfaitaire', 0), data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], data.get('depenses_eligibles_max', 0), data.get('montant_subvention_max', 0)))
+            cursor.execute('''INSERT INTO subventions (projet_id, nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux, depenses_eligibles_max, montant_subvention_max, date_debut_subvention, date_fin_subvention, assiette_eligible, montant_estime_total, date_derniere_maj) 
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (projet_id, data['nom'], data.get('mode_simplifie', 0), data.get('montant_forfaitaire', 0), data['depenses_temps_travail'], data['coef_temps_travail'], data['depenses_externes'], data['coef_externes'], data['depenses_autres_achats'], data['coef_autres_achats'], data['depenses_dotation_amortissements'], data['coef_dotation_amortissements'], data['cd'], data['taux'], data.get('depenses_eligibles_max', 0), data.get('montant_subvention_max', 0), data.get('date_debut_subvention', ''), data.get('date_fin_subvention', ''), data.get('assiette_eligible', 0), data.get('montant_estime_total', 0), data.get('date_derniere_maj', '')))
         
         # Sauvegarde des images temporaires (pour les nouveaux projets)
         if not self.projet_id and hasattr(self, 'temp_images'):  # Nouveau projet avec images temporaires
