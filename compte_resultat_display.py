@@ -403,9 +403,12 @@ class CompteResultatDisplay(QDialog):
             # Table n'existe pas encore
             data['recettes'] = 0
         
-        # 2. SUBVENTIONS - Répartition équitable par année/mois
+        # 2. SUBVENTIONS - NOUVELLE LOGIQUE avec redistribution automatique
         try:
             subventions_total = 0
+            # Importer la nouvelle méthode de calcul depuis SubventionDialog
+            from subvention_dialog import SubventionDialog
+            
             for project_id in self.project_ids:
                 # Récupérer les informations du projet (dates, etc.)
                 cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
@@ -414,35 +417,76 @@ class CompteResultatDisplay(QDialog):
                 if not projet_info or not projet_info[0] or not projet_info[1]:
                     continue  # Pas de dates de projet, skip
                 
-                # Calculer la subvention répartie pour cette période
-                subvention_periode = self.calculate_proportional_distributed_subvention(
-                    cursor, project_id, year, month, projet_info)
-                subventions_total += subvention_periode
+                # Récupérer toutes les subventions pour ce projet
+                cursor.execute('''
+                    SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                           depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                           depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                           date_debut_subvention, date_fin_subvention
+                    FROM subventions WHERE projet_id = ?
+                ''', (project_id,))
+                
+                subventions_config = cursor.fetchall()
+                
+                for subvention in subventions_config:
+                    # Construire le dictionnaire de données de subvention
+                    subvention_data = {
+                        'nom': subvention[0],
+                        'mode_simplifie': subvention[1] or 0,
+                        'montant_forfaitaire': subvention[2] or 0,
+                        'depenses_temps_travail': subvention[3] or 0,
+                        'coef_temps_travail': subvention[4] or 1,
+                        'depenses_externes': subvention[5] or 0,
+                        'coef_externes': subvention[6] or 1,
+                        'depenses_autres_achats': subvention[7] or 0,
+                        'coef_autres_achats': subvention[8] or 1,
+                        'depenses_dotation_amortissements': subvention[9] or 0,
+                        'coef_dotation_amortissements': subvention[10] or 1,
+                        'cd': subvention[11] or 1,
+                        'taux': subvention[12] or 100,
+                        'date_debut_subvention': subvention[13],
+                        'date_fin_subvention': subvention[14]
+                    }
+                    
+                    # Utiliser la nouvelle méthode avec redistribution automatique
+                    subvention_periode = SubventionDialog.calculate_distributed_subvention(
+                        project_id, subvention_data, year, month
+                    )
+                    subventions_total += subvention_periode
             
             data['subventions'] = subventions_total
-        except sqlite3.OperationalError:
+        except Exception as e:
+            print(f"Erreur calcul subventions: {e}")
             data['subventions'] = 0
         
-        # 3. ACHATS ET SOUS-TRAITANCE - table depenses
+        # 3. ACHATS ET SOUS-TRAITANCE - NOUVELLE LOGIQUE avec redistribution automatique
         try:
-            query = f"""
-                SELECT COALESCE(SUM(montant), 0) FROM depenses 
-                WHERE 1=1 {year_condition} {month_condition} {project_condition}
-            """
-            cursor.execute(query, self.project_ids)
-            data['achats_sous_traitance'] = cursor.fetchone()[0] or 0
-        except sqlite3.OperationalError:
+            achats_total = 0
+            for project_id in self.project_ids:
+                # Utiliser la nouvelle méthode de redistribution automatique
+                montant_periode = self.calculate_redistributed_expenses(
+                    cursor, project_id, year, month, 'depenses'
+                )
+                achats_total += montant_periode
+            
+            data['achats_sous_traitance'] = achats_total
+        except Exception as e:
+            print(f"Erreur calcul achats: {e}")
             data['achats_sous_traitance'] = 0
         
-        # 4. AUTRES ACHATS - table autres_depenses
+        # 4. AUTRES ACHATS - NOUVELLE LOGIQUE avec redistribution automatique
         try:
-            query = f"""
-                SELECT COALESCE(SUM(montant), 0) FROM autres_depenses 
-                WHERE 1=1 {year_condition} {month_condition} {project_condition}
-            """
-            cursor.execute(query, self.project_ids)
-            data['autres_achats'] = cursor.fetchone()[0] or 0
-        except sqlite3.OperationalError:
+            autres_achats_total = 0
+            for project_id in self.project_ids:
+                # Utiliser la nouvelle méthode de redistribution automatique
+                montant_periode = self.calculate_redistributed_expenses(
+                    cursor, project_id, year, month, 'autres_depenses'
+                )
+                autres_achats_total += montant_periode
+            
+            data['autres_achats'] = autres_achats_total
+        except Exception as e:
+            print(f"Erreur calcul autres achats: {e}")
             data['autres_achats'] = 0
         
         # 5. COÛT DIRECT - temps_travail * (type de coût sélectionné)
@@ -1863,6 +1907,96 @@ class CompteResultatDisplay(QDialog):
             return amortissements_total
             
         except Exception as e:
+            return 0
+    
+    def calculate_redistributed_expenses(self, cursor, project_id, year, month, table_name):
+        """
+        Calcule les dépenses avec la logique de redistribution automatique.
+        Si une seule dépense existe dans l'année, elle est redistribuée sur tous les mois actifs.
+        
+        Args:
+            cursor: Curseur de base de données
+            project_id: ID du projet
+            year: Année cible
+            month: Mois cible (None pour toute l'année)
+            table_name: 'depenses' ou 'autres_depenses'
+        """
+        try:
+            import datetime
+            
+            # Récupérer les dates du projet
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+            projet_info = cursor.fetchone()
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+            
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
+            # Vérifier si l'année demandée est dans la période du projet
+            if year < debut_projet.year or year > fin_projet.year:
+                return 0
+            
+            # Noms des mois français
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            # Récupérer toutes les dépenses de l'année pour ce projet
+            cursor.execute(f"""
+                SELECT mois, SUM(montant) as total_montant
+                FROM {table_name}
+                WHERE projet_id = ? AND annee = ?
+                GROUP BY mois
+            """, (project_id, year))
+            
+            depenses_par_mois = cursor.fetchall()
+            
+            # Si pas de dépenses, retourner 0
+            if not depenses_par_mois:
+                return 0
+            
+            # Si une seule entrée dans l'année, appliquer la redistribution automatique
+            if len(depenses_par_mois) == 1:
+                mois_unique, montant_total = depenses_par_mois[0]
+                
+                # Calculer les mois actifs du projet dans cette année
+                mois_actifs = []
+                for m in range(1, 13):
+                    mois_date = datetime.datetime(year, m, 1)
+                    if debut_projet <= mois_date <= fin_projet:
+                        mois_actifs.append(m)
+                
+                if not mois_actifs:
+                    return 0
+                
+                # Répartir le montant sur tous les mois actifs
+                montant_par_mois = montant_total / len(mois_actifs)
+                
+                if month:
+                    # Cas mensuel : retourner la part du mois demandé
+                    if month in mois_actifs:
+                        return montant_par_mois
+                    else:
+                        return 0
+                else:
+                    # Cas annuel : retourner le total redistribué
+                    return montant_total
+            
+            else:
+                # Cas normal : plusieurs dépenses dans l'année
+                if month:
+                    # Cas mensuel : chercher la dépense du mois exact
+                    month_name = month_names[month - 1]
+                    for mois_nom, montant in depenses_par_mois:
+                        if mois_nom == month_name:
+                            return montant
+                    return 0
+                else:
+                    # Cas annuel : sommer toutes les dépenses
+                    return sum(montant for _, montant in depenses_par_mois)
+                    
+        except Exception as e:
+            print(f"Erreur dans calculate_redistributed_expenses: {e}")
             return 0
 
 def show_compte_resultat(parent, config_data):

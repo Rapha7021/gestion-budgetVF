@@ -766,33 +766,31 @@ class SubventionDialog(QDialog):
         except ValueError:
             return 0
         
-        # Déterminer les mois à inclure dans le calcul
+        # Déterminer si on est dans la période de subvention
         if target_month:
             # Cas d'un mois spécifique
             target_date = datetime.datetime(target_year, target_month, 1)
             if target_date < debut_subv or target_date > fin_subv:
                 return 0  # Le mois n'est pas dans la période de subvention
-            
-            mois_a_calculer = [target_month]
         else:
-            # Cas d'une année complète : limiter aux mois couverts par la subvention
-            mois_a_calculer = []
+            # Cas d'une année complète : vérifier qu'au moins un mois est couvert
+            mois_couverts = []
             for mois in range(1, 13):
                 mois_date = datetime.datetime(target_year, mois, 1)
                 if debut_subv <= mois_date <= fin_subv:
-                    mois_a_calculer.append(mois)
+                    mois_couverts.append(mois)
             
-            if not mois_a_calculer:
+            if not mois_couverts:
                 return 0  # Aucun mois de l'année n'est couvert par la subvention
         
-        # Maintenant calculer pour chaque mois dans la liste
         month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
                       "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
         
-        for mois in mois_a_calculer:
-            mois_nom = month_names[mois - 1]
+        # CALCUL MENSUEL (un seul mois)
+        if target_month:
+            mois_nom = month_names[target_month - 1]
             
-            # Temps de travail si coché
+            # 1. Temps de travail pour ce mois
             if subvention_data.get('depenses_temps_travail', 0):
                 cursor.execute("""
                     SELECT SUM(tt.jours * cc.montant_charge)
@@ -803,38 +801,22 @@ class SubventionDialog(QDialog):
                 
                 result = cursor.fetchone()
                 if result and result[0]:
-                    # Appliquer les coefficients après le calcul brut
                     montant_brut = float(result[0])
                     montant_avec_cd = montant_brut * subvention_data.get('cd', 1)
                     montant_final = montant_avec_cd * subvention_data.get('coef_temps_travail', 1)
                     depenses_periode += montant_final
             
-            # Dépenses externes si cochées - avec gestion de la répartition automatique
+            # 2. Dépenses externes pour ce mois (avec redistribution automatique)
             if subvention_data.get('depenses_externes', 0):
-                if target_month:
-                    # Calcul mensuel : vérifier si répartition automatique nécessaire
-                    montant_reparti = SubventionDialog._get_redistributed_monthly_amount(
-                        cursor, project_id, target_year, target_month, 'depenses', debut_subv, fin_subv
-                    )
-                    if montant_reparti > 0:
-                        # Utiliser le montant réparti
-                        montant_final = montant_reparti * subvention_data.get('coef_externes', 1)
-                        depenses_periode += montant_final
-                    else:
-                        # Calcul normal
-                        cursor.execute("""
-                            SELECT SUM(montant)
-                            FROM depenses 
-                            WHERE projet_id = ? AND annee = ? AND mois = ?
-                        """, (project_id, target_year, mois_nom))
-                        
-                        result = cursor.fetchone()
-                        if result and result[0]:
-                            montant_brut = float(result[0])
-                            montant_final = montant_brut * subvention_data.get('coef_externes', 1)
-                            depenses_periode += montant_final
+                montant_reparti = SubventionDialog._get_redistributed_monthly_amount(
+                    cursor, project_id, target_year, target_month, 'depenses', debut_subv, fin_subv
+                )
+                if montant_reparti > 0:
+                    # Utiliser le montant réparti
+                    montant_final = montant_reparti * subvention_data.get('coef_externes', 1)
+                    depenses_periode += montant_final
                 else:
-                    # Calcul annuel normal
+                    # Calcul normal pour ce mois
                     cursor.execute("""
                         SELECT SUM(montant)
                         FROM depenses 
@@ -847,32 +829,17 @@ class SubventionDialog(QDialog):
                         montant_final = montant_brut * subvention_data.get('coef_externes', 1)
                         depenses_periode += montant_final
             
-            # Autres achats si cochés - avec gestion de la répartition automatique
+            # 3. Autres achats pour ce mois (avec redistribution automatique)
             if subvention_data.get('depenses_autres_achats', 0):
-                if target_month:
-                    # Calcul mensuel : vérifier si répartition automatique nécessaire
-                    montant_reparti = SubventionDialog._get_redistributed_monthly_amount(
-                        cursor, project_id, target_year, target_month, 'autres_depenses', debut_subv, fin_subv
-                    )
-                    if montant_reparti > 0:
-                        # Utiliser le montant réparti
-                        montant_final = montant_reparti * subvention_data.get('coef_autres_achats', 1)
-                        depenses_periode += montant_final
-                    else:
-                        # Calcul normal
-                        cursor.execute("""
-                            SELECT SUM(montant)
-                            FROM autres_depenses 
-                            WHERE projet_id = ? AND annee = ? AND mois = ?
-                        """, (project_id, target_year, mois_nom))
-                        
-                        result = cursor.fetchone()
-                        if result and result[0]:
-                            montant_brut = float(result[0])
-                            montant_final = montant_brut * subvention_data.get('coef_autres_achats', 1)
-                            depenses_periode += montant_final
+                montant_reparti = SubventionDialog._get_redistributed_monthly_amount(
+                    cursor, project_id, target_year, target_month, 'autres_depenses', debut_subv, fin_subv
+                )
+                if montant_reparti > 0:
+                    # Utiliser le montant réparti
+                    montant_final = montant_reparti * subvention_data.get('coef_autres_achats', 1)
+                    depenses_periode += montant_final
                 else:
-                    # Calcul annuel normal
+                    # Calcul normal pour ce mois
                     cursor.execute("""
                         SELECT SUM(montant)
                         FROM autres_depenses 
@@ -885,59 +852,42 @@ class SubventionDialog(QDialog):
                         montant_final = montant_brut * subvention_data.get('coef_autres_achats', 1)
                         depenses_periode += montant_final
         
-        # GESTION SPÉCIALE : Répartition automatique des dépenses uniques sur toute l'année
-        # Si une seule dépense externe ou autre achat est saisie dans l'année, la répartir sur tous les mois du projet
-        if not target_month:  # Seulement pour les calculs annuels
-            # Vérifier et répartir les dépenses externes
+        # CALCUL ANNUEL (tous les mois de l'année dans la période de subvention)
+        else:
+            # 1. Temps de travail pour tous les mois couverts
+            if subvention_data.get('depenses_temps_travail', 0):
+                for mois in mois_couverts:
+                    mois_nom = month_names[mois - 1]
+                    
+                    cursor.execute("""
+                        SELECT SUM(tt.jours * cc.montant_charge)
+                        FROM temps_travail tt
+                        JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
+                        WHERE tt.projet_id = ? AND tt.annee = ? AND tt.mois = ?
+                    """, (project_id, target_year, mois_nom))
+                    
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        montant_brut = float(result[0])
+                        montant_avec_cd = montant_brut * subvention_data.get('cd', 1)
+                        montant_final = montant_avec_cd * subvention_data.get('coef_temps_travail', 1)
+                        depenses_periode += montant_final
+            
+            # 2. Dépenses externes pour toute l'année (avec redistribution automatique)
             if subvention_data.get('depenses_externes', 0):
-                depenses_externes_annee = SubventionDialog._check_and_redistribute_single_expense(
+                montant_redistribue = SubventionDialog._check_and_redistribute_single_expense(
                     cursor, project_id, target_year, 'depenses', debut_subv, fin_subv, 
                     subvention_data.get('coef_externes', 1)
                 )
-                if depenses_externes_annee > 0:
-                    # Remplacer le calcul précédent par la répartition
-                    # On doit recalculer depenses_periode sans les dépenses externes déjà ajoutées
-                    depenses_periode_sans_externes = depenses_periode
-                    for mois in mois_a_calculer:
-                        mois_nom = month_names[mois - 1]
-                        cursor.execute("""
-                            SELECT SUM(montant)
-                            FROM depenses 
-                            WHERE projet_id = ? AND annee = ? AND mois = ?
-                        """, (project_id, target_year, mois_nom))
-                        result = cursor.fetchone()
-                        if result and result[0]:
-                            montant_brut = float(result[0])
-                            montant_final = montant_brut * subvention_data.get('coef_externes', 1)
-                            depenses_periode_sans_externes -= montant_final
-                    
-                    # Ajouter la répartition calculée
-                    depenses_periode = depenses_periode_sans_externes + depenses_externes_annee
+                depenses_periode += montant_redistribue
             
-            # Vérifier et répartir les autres achats
+            # 3. Autres achats pour toute l'année (avec redistribution automatique)
             if subvention_data.get('depenses_autres_achats', 0):
-                autres_achats_annee = SubventionDialog._check_and_redistribute_single_expense(
-                    cursor, project_id, target_year, 'autres_depenses', debut_subv, fin_subv,
+                montant_redistribue = SubventionDialog._check_and_redistribute_single_expense(
+                    cursor, project_id, target_year, 'autres_depenses', debut_subv, fin_subv, 
                     subvention_data.get('coef_autres_achats', 1)
                 )
-                if autres_achats_annee > 0:
-                    # Remplacer le calcul précédent par la répartition
-                    depenses_periode_sans_autres = depenses_periode
-                    for mois in mois_a_calculer:
-                        mois_nom = month_names[mois - 1]
-                        cursor.execute("""
-                            SELECT SUM(montant)
-                            FROM autres_depenses 
-                            WHERE projet_id = ? AND annee = ? AND mois = ?
-                        """, (project_id, target_year, mois_nom))
-                        result = cursor.fetchone()
-                        if result and result[0]:
-                            montant_brut = float(result[0])
-                            montant_final = montant_brut * subvention_data.get('coef_autres_achats', 1)
-                            depenses_periode_sans_autres -= montant_final
-                    
-                    # Ajouter la répartition calculée
-                    depenses_periode = depenses_periode_sans_autres + autres_achats_annee
+                depenses_periode += montant_redistribue
         
         # Amortissements si cochés (calcul au prorata de la période de subvention)
         if subvention_data.get('depenses_dotation_amortissements', 0):
@@ -965,8 +915,12 @@ class SubventionDialog(QDialog):
                         if nb_mois_total_projet > 0:
                             # Part mensuelle des amortissements
                             amort_mensuel = amort_total / nb_mois_total_projet
-                            # Ajouter l'amortissement pour le nombre de mois couverts
-                            depenses_periode += amort_mensuel * len(mois_a_calculer)
+                            if target_month:
+                                # Cas mensuel : ajouter l'amortissement pour 1 mois
+                                depenses_periode += amort_mensuel
+                            else:
+                                # Cas annuel : ajouter l'amortissement pour tous les mois couverts
+                                depenses_periode += amort_mensuel * len(mois_couverts)
                     except ValueError:
                         pass
         

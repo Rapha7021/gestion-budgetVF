@@ -948,7 +948,7 @@ class ProjectDetailsDialog(QDialog):
                     self.refresh_cir(0)
 
     def refresh_subventions(self):
-        """Affiche les montants des subventions sous forme de tableau (utilise les montants précalculés)"""
+        """Affiche les montants des subventions sous forme de tableau (recalcule avec la logique de répartition)"""
         # Supprimer les anciens labels de subventions (s'ils existent)
         while self.budget_vbox.count() > 4:  # Garder seulement les 4 premiers items (titre + 3 coûts)
             item = self.budget_vbox.takeAt(self.budget_vbox.count() - 1)
@@ -958,29 +958,49 @@ class ProjectDetailsDialog(QDialog):
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             
-            # Récupérer toutes les subventions pour ce projet avec les montants précalculés
+            # Récupérer toutes les subventions pour ce projet avec leurs paramètres
             try:
                 cursor.execute('''
-                    SELECT nom, taux, montant_subvention_max, depenses_eligibles_max, 
-                           montant_estime_total, date_derniere_maj, mode_simplifie, assiette_eligible
+                    SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                           depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                           depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                           date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
                     FROM subventions 
                     WHERE projet_id = ?
                 ''', (self.projet_id,))
                 subventions = cursor.fetchall()
             except sqlite3.OperationalError:
-                # Fallback pour les anciennes bases de données sans les nouvelles colonnes
+                # Fallback pour les anciennes bases de données
                 try:
                     cursor.execute('''
-                        SELECT nom, taux, montant_subvention_max, depenses_eligibles_max
+                        SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                               depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                               depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux
                         FROM subventions 
                         WHERE projet_id = ?
                     ''', (self.projet_id,))
                     # Ajouter des valeurs par défaut pour les colonnes manquantes
-                    subventions = [list(row) + [0.0, '', 0, 0.0] for row in cursor.fetchall()]
+                    subventions = [list(row) + [None, None, 0, 0] for row in cursor.fetchall()]
                 except sqlite3.OperationalError:
                     subventions = []
 
             if not subventions:
+                return
+
+            # Récupérer les dates du projet pour déterminer les années à calculer
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+            date_row = cursor.fetchone()
+            
+            if not date_row or not date_row[0] or not date_row[1]:
+                return
+            
+            try:
+                import datetime
+                debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+                # Calculer les années du projet
+                annees_projet = list(range(debut_projet.year, fin_projet.year + 1))
+            except ValueError:
                 return
 
             # Ajouter un séparateur et titre
@@ -1041,8 +1061,49 @@ class ProjectDetailsDialog(QDialog):
 
             total_subventions = 0
 
+            # Importer la nouvelle méthode de calcul depuis SubventionDialog
+            from subvention_dialog import SubventionDialog
+
             for row, subv in enumerate(subventions):
-                nom, taux, montant_max, depenses_max, montant_estime, date_maj, mode_simplifie, assiette_eligible = subv
+                (nom, mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, 
+                 dep_autres, coef_autres, dep_amort, coef_amort, cd, taux, 
+                 date_debut_subv, date_fin_subv, montant_max, depenses_max) = subv
+                
+                # Construire le dictionnaire de données de subvention pour le calcul
+                subvention_data = {
+                    'nom': nom,
+                    'mode_simplifie': mode_simplifie or 0,
+                    'montant_forfaitaire': montant_forfaitaire or 0,
+                    'depenses_temps_travail': dep_temps or 0,
+                    'coef_temps_travail': coef_temps or 1,
+                    'depenses_externes': dep_ext or 0,
+                    'coef_externes': coef_ext or 1,
+                    'depenses_autres_achats': dep_autres or 0,
+                    'coef_autres_achats': coef_autres or 1,
+                    'depenses_dotation_amortissements': dep_amort or 0,
+                    'coef_dotation_amortissements': coef_amort or 1,
+                    'cd': cd or 1,
+                    'taux': taux or 100,
+                    'date_debut_subvention': date_debut_subv,
+                    'date_fin_subvention': date_fin_subv
+                }
+                
+                # Calculer le montant total estimé avec la nouvelle logique (somme sur toutes les années du projet)
+                montant_total_estime = 0
+                assiette_totale_courante = 0
+                
+                for annee in annees_projet:
+                    # Calculer la subvention pour cette année avec la nouvelle logique de répartition
+                    montant_annee = SubventionDialog.calculate_distributed_subvention(
+                        self.projet_id, subvention_data, annee, None  # None = toute l'année
+                    )
+                    montant_total_estime += montant_annee
+                    
+                    # Calculer aussi l'assiette éligible pour cette année
+                    assiette_annee = SubventionDialog._calculate_period_eligible_expenses(
+                        cursor, self.projet_id, subvention_data, annee, None
+                    )
+                    assiette_totale_courante += assiette_annee
                 
                 # Nom de la subvention
                 subv_table.setItem(row, 0, QTableWidgetItem(nom or ""))
@@ -1059,21 +1120,70 @@ class ProjectDetailsDialog(QDialog):
                 # Taux (avec virgule française)
                 subv_table.setItem(row, 3, QTableWidgetItem(f"{taux:.1f}%".replace('.', ',') if taux else "0,0%"))
                 
-                # Coût éligible courant (utiliser la valeur cachée)
+                # Coût éligible courant (recalculé avec la nouvelle logique)
                 if mode_simplifie:
                     # Pour le mode forfaitaire, afficher "---" 
                     subv_table.setItem(row, 4, QTableWidgetItem("---"))
                 else:
-                    # Pour le mode détaillé, afficher l'assiette éligible cachée
-                    assiette_a_afficher = assiette_eligible or 0
-                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_a_afficher)))
+                    # Pour le mode détaillé, afficher l'assiette éligible recalculée
+                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_totale_courante)))
                 
-                # Subvention attendue (montant précalculé)
-                montant_a_afficher = montant_estime or 0
-                subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant_a_afficher)))
+                # Subvention attendue (recalculée avec la nouvelle logique)
+                subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant_total_estime)))
                 
                 # Ajouter au total
-                total_subventions += montant_a_afficher
+                total_subventions += montant_total_estime
+
+            # Ajouter le tableau au layout
+            self.budget_vbox.addWidget(subv_table)
+
+            # Calculer et afficher le CIR si le projet l'a activé
+            if self.has_cir_activated():
+                self.refresh_cir(total_subventions)
+            subv_table.setMinimumHeight(60 + len(subventions) * 25)
+            subv_table.setMinimumWidth(500)  # Largeur réduite
+            subv_table.setMaximumWidth(550)  # Largeur maximum pour rester compact
+            
+            # Configurer l'apparence du tableau
+            subv_table.setAlternatingRowColors(True)
+            subv_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            subv_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            
+            # Style du tableau
+            subv_table.setStyleSheet("""
+                QHeaderView::section {
+                    font-size: 9px;
+                    font-weight: bold;
+                    padding: 2px;
+                    background-color: #f0f0f0;
+                    border: 1px solid #d0d0d0;
+                    text-align: center;
+                }
+                QTableWidget {
+                    font-size: 9px;
+                }
+            """)
+            
+            # Ajuster automatiquement la largeur des colonnes
+            header = subv_table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Nom
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # Coût éligible max
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # Aide max
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)  # Taux
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)  # Coût éligible courant
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)  # Subvention attendue
+            
+            # Définir les largeurs de colonnes
+            subv_table.setColumnWidth(0, 80)   # Nom
+            subv_table.setColumnWidth(1, 85)   # Coût éligible max
+            subv_table.setColumnWidth(2, 75)   # Aide max
+            subv_table.setColumnWidth(3, 50)   # Taux
+            subv_table.setColumnWidth(4, 100)  # Coût éligible courant
+            subv_table.setColumnWidth(5, 100)  # Subvention attendue
+
+            total_subventions = 0
+
+            # La boucle pour remplir le tableau est déjà gérée plus haut dans la fonction
 
             # Ajouter le tableau au layout
             self.budget_vbox.addWidget(subv_table)
