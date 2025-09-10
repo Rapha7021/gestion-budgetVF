@@ -9,7 +9,6 @@ import sqlite3
 import sys
 import datetime
 import re
-import shutil
 import os
 import pandas as pd  # Ajout pour lecture Excel
 
@@ -426,23 +425,78 @@ class MainWindow(QWidget):
         dialog = CategorieCoutDialog(self)
         dialog.exec()
 
+    def calculate_project_status(self, date_debut, date_fin):
+        """Calcule automatiquement l'état d'un projet basé sur ses dates"""
+        if not date_debut or not date_fin:
+            return "En cours"  # État par défaut si dates manquantes
+            
+        try:
+            date_aujourd_hui = datetime.date.today()
+            
+            # Convertir les dates MM/yyyy en objets date
+            debut_mois, debut_annee = map(int, date_debut.split('/'))
+            fin_mois, fin_annee = map(int, date_fin.split('/'))
+            
+            # Premier jour du mois de début
+            debut_projet = datetime.date(debut_annee, debut_mois, 1)
+            
+            # Dernier jour du mois de fin
+            if fin_mois == 12:
+                fin_projet = datetime.date(fin_annee + 1, 1, 1) - datetime.timedelta(days=1)
+            else:
+                fin_projet = datetime.date(fin_annee, fin_mois + 1, 1) - datetime.timedelta(days=1)
+            
+            # Déterminer l'état selon les dates
+            if date_aujourd_hui < debut_projet:
+                return "Futur"
+            elif date_aujourd_hui > fin_projet:
+                return "Terminé"
+            else:
+                return "En cours"
+                
+        except Exception:
+            # En cas d'erreur de parsing, retourner l'état par défaut
+            return "En cours"
+
     def load_projects(self):
         self.project_table.setRowCount(0)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # Jointure pour récupérer le nom complet du chef de projet
+        # Jointure pour récupérer le nom complet du chef de projet + dates pour calcul automatique
         cursor.execute('''
-            SELECT p.id, p.code, p.nom, c.nom || ' ' || c.prenom AS chef_complet, p.etat
+            SELECT p.id, p.code, p.nom, c.nom || ' ' || c.prenom AS chef_complet, p.etat, p.date_debut, p.date_fin
             FROM projets p
             LEFT JOIN chefs_projet c ON p.chef = c.id
             ORDER BY p.id DESC
         ''')
-        for row_idx, (pid, code, nom, chef_complet, etat) in enumerate(cursor.fetchall()):
+        
+        projects_to_update = []  # Liste des projets dont l'état doit être mis à jour
+        
+        for row_idx, (pid, code, nom, chef_complet, etat_actuel, date_debut, date_fin) in enumerate(cursor.fetchall()):
+            # Calculer l'état automatique basé sur les dates
+            etat_auto = self.calculate_project_status(date_debut, date_fin)
+            
+            # Si l'état calculé diffère de l'état en base, noter pour mise à jour
+            if etat_auto != etat_actuel:
+                projects_to_update.append((pid, etat_auto))
+                etat_affiche = etat_auto  # Afficher le nouvel état
+            else:
+                etat_affiche = etat_actuel  # Garder l'état existant
+            
+            # Ajouter la ligne au tableau
             self.project_table.insertRow(row_idx)
             self.project_table.setItem(row_idx, 0, QTableWidgetItem(str(code)))
             self.project_table.setItem(row_idx, 1, QTableWidgetItem(str(nom)))
             self.project_table.setItem(row_idx, 2, QTableWidgetItem(str(chef_complet) if chef_complet else "Non assigné"))
-            self.project_table.setItem(row_idx, 3, QTableWidgetItem(str(etat)))
+            self.project_table.setItem(row_idx, 3, QTableWidgetItem(str(etat_affiche)))
+        
+        # Mettre à jour les états en base de données si nécessaire
+        for pid, nouvel_etat in projects_to_update:
+            cursor.execute('UPDATE projets SET etat = ? WHERE id = ?', (nouvel_etat, pid))
+        
+        if projects_to_update:
+            conn.commit()  # Sauvegarder les changements seulement s'il y en a
+            
         conn.close()
 
     def open_project_form(self):
@@ -499,7 +553,8 @@ class ProjectForm(QDialog):
         super().__init__(parent)
         self.projet_id = projet_id
         self.setWindowTitle('Créer un projet')
-        self.setMinimumWidth(1200)
+        self.setMinimumWidth(900)  # Réduit de 1200 à 900
+        self.setMaximumHeight(800)  # Limite la hauteur pour voir les boutons
         self.layout = QVBoxLayout()
         grid = QGridLayout()
         row = 0
@@ -532,16 +587,25 @@ class ProjectForm(QDialog):
         self.load_chefs_projet()
         grid.addWidget(self.chef_combo, row, 3)
         row += 1
-        # Etat projet
+        # Etat projet avec mode automatique
         grid.addWidget(QLabel('Etat projet:'), row, 0)
+        etat_layout = QHBoxLayout()
         self.etat_combo = QComboBox()
         self.etat_combo.addItems(['Terminé', 'En cours', 'Futur'])
-        grid.addWidget(self.etat_combo, row, 1)
+        self.etat_combo.setEnabled(False)  # Désactivé par défaut car mode auto activé
+        self.etat_auto_check = QCheckBox('Mode automatique')
+        self.etat_auto_check.setChecked(True)  # Coché par défaut
+        etat_layout.addWidget(self.etat_combo)
+        etat_layout.addWidget(self.etat_auto_check)
+        etat_layout.addStretch()
+        etat_widget = QWidget()
+        etat_widget.setLayout(etat_layout)
+        grid.addWidget(etat_widget, row, 1)
         row += 1
         # Détails projet (sur toute la largeur) - version compacte
         grid.addWidget(QLabel('Détails projet:'), row, 0)
         self.details_edit = QTextEdit()
-        self.details_edit.setMaximumHeight(60)  # Hauteur limitée
+        self.details_edit.setMaximumHeight(50)  # Réduit de 60 à 50 pour gagner de la place
         grid.addWidget(self.details_edit, row, 1, 1, 3)
         row += 1
         # Thèmes (recherche + tags) - version très compacte
@@ -550,7 +614,7 @@ class ProjectForm(QDialog):
         self.theme_search = QLineEdit()
         self.theme_search.setPlaceholderText('Rechercher un thème...')
         self.theme_listwidget = QListWidget()
-        self.theme_listwidget.setMaximumHeight(120)  # Hauteur augmentée pour une meilleure visibilité
+        self.theme_listwidget.setMaximumHeight(80)  # Réduit de 120 à 80 pour gagner de la place
         theme_vbox.addWidget(self.theme_search)
         theme_vbox.addWidget(self.theme_listwidget)
         self.tag_area = QScrollArea()
@@ -722,6 +786,10 @@ class ProjectForm(QDialog):
         # Ajout des contrôles pour les dates
         self.date_debut.dateChanged.connect(self.check_form_valid)
         self.date_fin.dateChanged.connect(self.check_form_valid)
+        self.date_debut.dateChanged.connect(self.update_etat_auto)
+        self.date_fin.dateChanged.connect(self.update_etat_auto)
+        # Contrôle pour le mode automatique de l'état
+        self.etat_auto_check.toggled.connect(self.on_etat_auto_toggled)
         self.check_form_valid()
         
         # Rafraîchir les catégories d'équipe au cas où de nouvelles auraient été ajoutées
@@ -730,6 +798,10 @@ class ProjectForm(QDialog):
         # Charger les données du projet si modification
         if self.projet_id:
             self.load_project_data()
+        else:
+            # Pour un nouveau projet, activer le mode auto et calculer l'état initial
+            self.on_etat_auto_toggled(True)
+            self.update_etat_auto()
         # Bouton Import Excel
         self.btn_import_excel = QPushButton('Importer Excel')
         self.btn_import_excel.setToolTip(
@@ -872,6 +944,51 @@ class ProjectForm(QDialog):
 
         self.btn_ok.setEnabled(code_ok and nom_ok and debut_ok and fin_ok and dates_ok)
         self.btn_budget.setEnabled(code_ok and nom_ok and debut_ok and fin_ok and dates_ok)
+
+    def update_etat_auto(self):
+        """Met à jour automatiquement l'état du projet si le mode auto est activé"""
+        if not self.etat_auto_check.isChecked():
+            return
+            
+        date_aujourd_hui = datetime.date.today()
+        
+        # Convertir les QDate en dates python pour la comparaison
+        # Les dates dans l'interface sont au format MM/yyyy, on prend le premier jour du mois
+        try:
+            qdate_debut = self.date_debut.date()
+            qdate_fin = self.date_fin.date()
+            
+            debut_mois = datetime.date(qdate_debut.year(), qdate_debut.month(), 1)
+            # Pour la fin, on prend le dernier jour du mois
+            if qdate_fin.month() == 12:
+                fin_mois = datetime.date(qdate_fin.year() + 1, 1, 1) - datetime.timedelta(days=1)
+            else:
+                fin_mois = datetime.date(qdate_fin.year(), qdate_fin.month() + 1, 1) - datetime.timedelta(days=1)
+            
+            # Déterminer l'état selon les dates
+            if date_aujourd_hui < debut_mois:
+                nouvel_etat = "Futur"
+            elif date_aujourd_hui > fin_mois:
+                nouvel_etat = "Terminé"
+            else:
+                nouvel_etat = "En cours"
+            
+            # Mettre à jour le combo box
+            index = self.etat_combo.findText(nouvel_etat)
+            if index >= 0:
+                self.etat_combo.setCurrentIndex(index)
+                
+        except Exception as e:
+            # En cas d'erreur, ne pas modifier l'état
+            pass
+
+    def on_etat_auto_toggled(self, checked):
+        """Gère l'activation/désactivation du mode automatique pour l'état"""
+        self.etat_combo.setEnabled(not checked)
+        if checked:
+            # Si on active le mode auto, calculer l'état automatiquement
+            self.update_etat_auto()
+        # Si on désactive le mode auto, l'utilisateur peut choisir manuellement
 
     def invest_context_menu(self, pos):
         item = self.invest_list.itemAt(pos)
@@ -1677,9 +1794,13 @@ class ProjectForm(QDialog):
             index = self.chef_combo.findData(chef_id)
             if index != -1:
                 self.chef_combo.setCurrentIndex(index)
+            # Pour l'état, d'abord désactiver le mode auto pour pouvoir le définir
+            self.etat_auto_check.setChecked(False)
             idx = self.etat_combo.findText(str(res[7]))
             if idx >= 0:
                 self.etat_combo.setCurrentIndex(idx)
+            # Puis réactiver le mode auto par défaut
+            self.etat_auto_check.setChecked(True)
             self.cir_check.setChecked(bool(res[8]))
             # Note: subvention est maintenant gérée automatiquement via la liste
             
