@@ -569,7 +569,7 @@ class ProjectDetailsDialog(QDialog):
             conn.close()
             return data
         
-        # 2. Calculer le temps de travail et le montant chargé
+        # 2. Calculer le temps de travail et le montant chargé - FILTRÉ PAR DATES DU PROJET
         cursor.execute("""
             SELECT tt.annee, tt.categorie, tt.mois, tt.jours 
             FROM temps_travail tt 
@@ -589,7 +589,23 @@ class ProjectDetailsDialog(QDialog):
             "Collaborateur moyen": "MOY"
         }
         
+        month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                      "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+        
         for annee, categorie, mois, jours in temps_travail_rows:
+            # NOUVEAU: Vérifier que cette entrée est dans la période du projet
+            try:
+                # Convertir le mois français en numéro
+                mois_num = month_names.index(mois) + 1 if mois in month_names else 1
+                entry_date = datetime.datetime(annee, mois_num, 1)
+                
+                # Vérifier si cette entrée est dans la période du projet
+                if not (debut_projet <= entry_date <= fin_projet):
+                    continue  # Ignorer cette entrée si hors période
+            except (ValueError, IndexError):
+                # Si erreur de conversion, ignorer cette entrée
+                continue
+            
             # Convertir la catégorie du temps de travail au format de categorie_cout
             categorie_code = mapping_categories.get(categorie, "")
             
@@ -613,27 +629,51 @@ class ProjectDetailsDialog(QDialog):
         
         data['temps_travail_total'] = cout_total_temps
         
-        # 3. Récupérer toutes les dépenses externes
+        # 3. Récupérer les dépenses externes - FILTRÉ PAR DATES DU PROJET
         cursor.execute("""
-            SELECT SUM(montant) 
-            FROM depenses 
-            WHERE projet_id = ?
+            SELECT d.annee, d.mois, d.montant
+            FROM depenses d
+            WHERE d.projet_id = ?
         """, (self.projet_id,))
         
-        depenses_row = cursor.fetchone()
-        if depenses_row and depenses_row[0]:
-            data['depenses_externes'] = float(depenses_row[0])
+        depenses_rows = cursor.fetchall()
+        total_depenses_externes = 0
         
-        # 4. Récupérer toutes les autres dépenses
+        for annee, mois, montant in depenses_rows:
+            # Vérifier que cette dépense est dans la période du projet
+            try:
+                mois_num = month_names.index(mois) + 1 if mois in month_names else 1
+                entry_date = datetime.datetime(annee, mois_num, 1)
+                
+                if debut_projet <= entry_date <= fin_projet:
+                    total_depenses_externes += float(montant)
+            except (ValueError, IndexError):
+                continue
+        
+        data['depenses_externes'] = total_depenses_externes
+        
+        # 4. Récupérer les autres dépenses - FILTRÉ PAR DATES DU PROJET
         cursor.execute("""
-            SELECT SUM(montant) 
-            FROM autres_depenses 
-            WHERE projet_id = ?
+            SELECT ad.annee, ad.mois, ad.montant
+            FROM autres_depenses ad
+            WHERE ad.projet_id = ?
         """, (self.projet_id,))
         
-        autres_depenses_row = cursor.fetchone()
-        if autres_depenses_row and autres_depenses_row[0]:
-            data['autres_achats'] = float(autres_depenses_row[0])
+        autres_depenses_rows = cursor.fetchall()
+        total_autres_achats = 0
+        
+        for annee, mois, montant in autres_depenses_rows:
+            # Vérifier que cette dépense est dans la période du projet
+            try:
+                mois_num = month_names.index(mois) + 1 if mois in month_names else 1
+                entry_date = datetime.datetime(annee, mois_num, 1)
+                
+                if debut_projet <= entry_date <= fin_projet:
+                    total_autres_achats += float(montant)
+            except (ValueError, IndexError):
+                continue
+        
+        data['autres_achats'] = total_autres_achats
         
         # 5. Calculer les dotations aux amortissements
         cursor.execute("""

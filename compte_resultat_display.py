@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import re
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
                             QTableWidgetItem, QPushButton, QMessageBox, 
                             QFileDialog, QHeaderView, QGroupBox, QGridLayout, 
@@ -638,44 +639,70 @@ class CompteResultatDisplay(QDialog):
                 return 0
             
             # 1. Calculer les totaux sur toutes les années du projet pour tous les types de dépenses éligibles
+            # CORRECTION: Filtrer par les dates de début et fin du projet
             total_montant_charge = 0
             total_amortissements = 0
             total_subventions = 0
             
-            # Calculer les coûts éligibles de la période cible pour la répartition
-            # (sera recalculé plus bas avec les bons coefficients)
-            
+            # Récupérer les dates de projet pour chaque projet CIR et calculer les années valides
+            valid_years_per_project = {}
             month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
                           "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
             
+            for project_id in cir_project_ids:
+                cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+                projet_info = cursor.fetchone()
+                if projet_info and projet_info[0] and projet_info[1]:
+                    try:
+                        debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+                        fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+                        
+                        # Calculer les années valides pour ce projet
+                        valid_years = []
+                        for year in range(debut_projet.year, fin_projet.year + 1):
+                            valid_years.append(year)
+                        valid_years_per_project[project_id] = {
+                            'years': valid_years,
+                            'debut': debut_projet,
+                            'fin': fin_projet
+                        }
+                    except ValueError:
+                        # Dates invalides, ignorer ce projet
+                        continue
+            
+            # Calculer les totaux uniquement pour les années valides de chaque projet
             for year in self.years:
-                # Montant chargé pour cette année
+                # Montant chargé pour cette année (seulement pour les projets où cette année est valide)
                 year_montant_charge = 0
-                cir_project_condition = f"AND tt.projet_id IN ({','.join(['?'] * len(cir_project_ids))})"
+                valid_projects_for_year = [pid for pid, info in valid_years_per_project.items() 
+                                         if year in info['years']]
                 
-                query = f"""
-                    SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
-                    FROM temps_travail tt
-                    JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
-                    WHERE tt.annee = {year} {cir_project_condition}
-                """
-                cursor.execute(query, cir_project_ids)
-                year_montant_charge = cursor.fetchone()[0] or 0
-                total_montant_charge += year_montant_charge                # Amortissements pour cette année
+                if valid_projects_for_year:
+                    cir_project_condition = f"AND tt.projet_id IN ({','.join(['?'] * len(valid_projects_for_year))})"
+                    
+                    query = f"""
+                        SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
+                        FROM temps_travail tt
+                        JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
+                        WHERE tt.annee = {year} {cir_project_condition}
+                    """
+                    cursor.execute(query, valid_projects_for_year)
+                    year_montant_charge = cursor.fetchone()[0] or 0
+                    total_montant_charge += year_montant_charge
+
+                # Amortissements pour cette année (seulement pour les projets valides)
                 year_amort = 0
-                for project_id in cir_project_ids:
+                for project_id in valid_projects_for_year:
                     amort = self.calculate_amortissement_for_period(cursor, project_id, year)
                     year_amort += amort
                 total_amortissements += year_amort
                 
-                # Si c'est l'année cible, on traitera les calculs plus tard avec les bons coefficients
-                
-                # Subventions pour cette année
+                # Subventions pour cette année (seulement pour les projets valides)
                 year_subvention = 0
-                for project_id in cir_project_ids:
-                    cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
-                    projet_info = cursor.fetchone()
-                    if projet_info:
+                for project_id in valid_projects_for_year:
+                    if project_id in valid_years_per_project:
+                        projet_info = (valid_years_per_project[project_id]['debut'].strftime('%m/%Y'),
+                                     valid_years_per_project[project_id]['fin'].strftime('%m/%Y'))
                         subv = self.calculate_proportional_distributed_subvention(
                             cursor, project_id, year, None, projet_info)
                         year_subvention += subv
@@ -715,41 +742,56 @@ class CompteResultatDisplay(QDialog):
             if total_eligible_costs > 0:
                 
                 # Appliquer les coefficients k1 et k2 aux coûts de la période cible
-                # target_period_eligible_costs contient déjà montant_charge + amortissements
                 # Il faut séparer pour appliquer les bons coefficients
                 
                 # Recalculer séparément pour appliquer les coefficients correctement
                 period_montant_charge_eligible = 0
                 period_amortissements_eligible = 0
                 
-                if target_month:
-                    # Pour un mois spécifique
-                    query_month = f"""
-                        SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
-                        FROM temps_travail tt
-                        JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
-                        WHERE tt.annee = {target_year} AND tt.mois = '{month_names[target_month-1]}' {cir_project_condition}
-                    """
-                    cursor.execute(query_month, cir_project_ids)
-                    period_montant_charge_eligible = cursor.fetchone()[0] or 0
-                    
-                    for project_id in cir_project_ids:
-                        amort = self.calculate_amortissement_for_period(cursor, project_id, target_year, target_month)
-                        period_amortissements_eligible += amort
-                else:
-                    # Pour une année complète
-                    query_year = f"""
-                        SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
-                        FROM temps_travail tt
-                        JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
-                        WHERE tt.annee = {target_year} {cir_project_condition}
-                    """
-                    cursor.execute(query_year, cir_project_ids)
-                    period_montant_charge_eligible = cursor.fetchone()[0] or 0
-                    
-                    for project_id in cir_project_ids:
-                        amort = self.calculate_amortissement_for_period(cursor, project_id, target_year)
-                        period_amortissements_eligible += amort
+                # Identifier les projets valides pour l'année cible
+                valid_projects_for_target = [pid for pid, info in valid_years_per_project.items() 
+                                           if target_year in info['years']]
+                
+                if valid_projects_for_target:
+                    if target_month:
+                        # Pour un mois spécifique - vérifier aussi que le mois est dans la période du projet
+                        filtered_projects_for_month = []
+                        for project_id in valid_projects_for_target:
+                            info = valid_years_per_project[project_id]
+                            # Vérifier que le mois/année demandé est dans la période du projet
+                            target_date = datetime.datetime(target_year, target_month, 1)
+                            if info['debut'] <= target_date <= info['fin']:
+                                filtered_projects_for_month.append(project_id)
+                        
+                        if filtered_projects_for_month:
+                            cir_project_condition_month = f"AND tt.projet_id IN ({','.join(['?'] * len(filtered_projects_for_month))})"
+                            query_month = f"""
+                                SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
+                                FROM temps_travail tt
+                                JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
+                                WHERE tt.annee = {target_year} AND tt.mois = '{month_names[target_month-1]}' {cir_project_condition_month}
+                            """
+                            cursor.execute(query_month, filtered_projects_for_month)
+                            period_montant_charge_eligible = cursor.fetchone()[0] or 0
+                            
+                            for project_id in filtered_projects_for_month:
+                                amort = self.calculate_amortissement_for_period(cursor, project_id, target_year, target_month)
+                                period_amortissements_eligible += amort
+                    else:
+                        # Pour une année complète
+                        cir_project_condition_year = f"AND tt.projet_id IN ({','.join(['?'] * len(valid_projects_for_target))})"
+                        query_year = f"""
+                            SELECT COALESCE(SUM(tt.jours * cc.montant_charge), 0)
+                            FROM temps_travail tt
+                            JOIN categorie_cout cc ON tt.categorie = cc.libelle AND tt.annee = cc.annee
+                            WHERE tt.annee = {target_year} {cir_project_condition_year}
+                        """
+                        cursor.execute(query_year, valid_projects_for_target)
+                        period_montant_charge_eligible = cursor.fetchone()[0] or 0
+                        
+                        for project_id in valid_projects_for_target:
+                            amort = self.calculate_amortissement_for_period(cursor, project_id, target_year)
+                            period_amortissements_eligible += amort
                 
                 # Appliquer les coefficients aux coûts de la période
                 target_period_weighted_costs = (period_montant_charge_eligible * k1) + (period_amortissements_eligible * k2)
