@@ -1098,22 +1098,25 @@ class ProjectDetailsDialog(QDialog):
                         cursor, self.projet_id, subvention_data, annee, None
                     )
                     assiette_totale_courante += assiette_annee
+                
+                # Appliquer le plafond du coût éligible max à l'assiette totale
+                assiette_plafonnee = assiette_totale_courante
+                if not mode_simplifie and depenses_max and depenses_max > 0:
+                    assiette_plafonnee = min(assiette_totale_courante, depenses_max)
+                
+                # Calculer la subvention attendue
+                if mode_simplifie:
+                    # Mode forfaitaire
+                    montant_total_estime = montant_forfaitaire or 0
+                else:
+                    # Mode détaillé - appliquer le taux sur l'assiette éligible plafonnée
+                    montant_avant_plafond = assiette_plafonnee * (taux / 100.0)
                     
-                    # Calculer la subvention pour cette année
-                    if mode_simplifie:
-                        # Mode forfaitaire
-                        montant_annee = montant_forfaitaire or 0
+                    # Appliquer le plafond du montant max si défini
+                    if montant_max and montant_max > 0:
+                        montant_total_estime = min(montant_avant_plafond, montant_max)
                     else:
-                        # Mode détaillé - appliquer le taux sur l'assiette éligible
-                        montant_avant_plafond = assiette_annee * (taux / 100.0)
-                        
-                        # Appliquer les plafonds si définis
-                        if montant_max and montant_max > 0:
-                            montant_annee = min(montant_avant_plafond, montant_max)
-                        else:
-                            montant_annee = montant_avant_plafond
-                    
-                    montant_total_estime += montant_annee
+                        montant_total_estime = montant_avant_plafond
                 
                 # Nom de la subvention
                 subv_table.setItem(row, 0, QTableWidgetItem(nom or ""))
@@ -1135,65 +1138,14 @@ class ProjectDetailsDialog(QDialog):
                     # Pour le mode forfaitaire, afficher "---" 
                     subv_table.setItem(row, 4, QTableWidgetItem("---"))
                 else:
-                    # Pour le mode détaillé, afficher l'assiette éligible recalculée
-                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_totale_courante)))
+                    # Pour le mode détaillé, afficher l'assiette éligible plafonnée
+                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_plafonnee)))
                 
                 # Subvention attendue (recalculée avec la nouvelle logique)
                 subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant_total_estime)))
                 
                 # Ajouter au total
                 total_subventions += montant_total_estime
-
-            # Ajouter le tableau au layout
-            self.budget_vbox.addWidget(subv_table)
-
-            # Calculer et afficher le CIR si le projet l'a activé
-            if self.has_cir_activated():
-                self.refresh_cir(total_subventions)
-            subv_table.setMinimumHeight(60 + len(subventions) * 25)
-            subv_table.setMinimumWidth(500)  # Largeur réduite
-            subv_table.setMaximumWidth(550)  # Largeur maximum pour rester compact
-            
-            # Configurer l'apparence du tableau
-            subv_table.setAlternatingRowColors(True)
-            subv_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-            subv_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            
-            # Style du tableau
-            subv_table.setStyleSheet("""
-                QHeaderView::section {
-                    font-size: 9px;
-                    font-weight: bold;
-                    padding: 2px;
-                    background-color: #f0f0f0;
-                    border: 1px solid #d0d0d0;
-                    text-align: center;
-                }
-                QTableWidget {
-                    font-size: 9px;
-                }
-            """)
-            
-            # Ajuster automatiquement la largeur des colonnes
-            header = subv_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Nom
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # Coût éligible max
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # Aide max
-            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)  # Taux
-            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)  # Coût éligible courant
-            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)  # Subvention attendue
-            
-            # Définir les largeurs de colonnes
-            subv_table.setColumnWidth(0, 80)   # Nom
-            subv_table.setColumnWidth(1, 85)   # Coût éligible max
-            subv_table.setColumnWidth(2, 75)   # Aide max
-            subv_table.setColumnWidth(3, 50)   # Taux
-            subv_table.setColumnWidth(4, 100)  # Coût éligible courant
-            subv_table.setColumnWidth(5, 100)  # Subvention attendue
-
-            total_subventions = 0
-
-            # La boucle pour remplir le tableau est déjà gérée plus haut dans la fonction
 
             # Ajouter le tableau au layout
             self.budget_vbox.addWidget(subv_table)

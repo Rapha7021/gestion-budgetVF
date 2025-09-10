@@ -9,8 +9,6 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWi
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-import traceback
-import re
 
 DB_PATH = 'gestion_budget.db'
 
@@ -426,7 +424,6 @@ class CompteResultatDisplay(QDialog):
             
             data['subventions'] = subventions_total
         except Exception as e:
-            print(f"Erreur calcul subventions: {e}")
             data['subventions'] = 0
         
         # 3. ACHATS ET SOUS-TRAITANCE - NOUVELLE LOGIQUE avec redistribution automatique
@@ -441,7 +438,6 @@ class CompteResultatDisplay(QDialog):
             
             data['achats_sous_traitance'] = achats_total
         except Exception as e:
-            print(f"Erreur calcul achats: {e}")
             data['achats_sous_traitance'] = 0
         
         # 4. AUTRES ACHATS - NOUVELLE LOGIQUE avec redistribution automatique
@@ -456,7 +452,6 @@ class CompteResultatDisplay(QDialog):
             
             data['autres_achats'] = autres_achats_total
         except Exception as e:
-            print(f"Erreur calcul autres achats: {e}")
             data['autres_achats'] = 0
         
         # 5. COÛT DIRECT - temps_travail * (type de coût sélectionné)
@@ -510,8 +505,6 @@ class CompteResultatDisplay(QDialog):
                         AND t.categorie NOT IN (SELECT libelle FROM categorie_cout WHERE annee = {year})
                     """, self.project_ids)
                     missing_cats = [row[0] for row in cursor.fetchall()]
-                    if missing_cats:
-                        print(f"  - Catégories temps_travail sans correspondance: {missing_cats}")
                         
         except sqlite3.OperationalError as e:
             data['cout_direct'] = 0
@@ -556,7 +549,6 @@ class CompteResultatDisplay(QDialog):
                 self._cir_error_shown = True
             data['credit_impot'] = 0
         except Exception as e:
-            print(f"DEBUG CIR: Erreur générale = {str(e)}")
             data['credit_impot'] = 0
         
         return data
@@ -1452,7 +1444,7 @@ class CompteResultatDisplay(QDialog):
                 SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                        depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
                        depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                       date_debut_subvention, date_fin_subvention
+                       date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
                 FROM subventions WHERE projet_id = ?
             ''', (project_id,))
             
@@ -1467,6 +1459,8 @@ class CompteResultatDisplay(QDialog):
                 montant_forfaitaire = subvention[2] or 0
                 date_debut_subv = subvention[13] or projet_info[0]  # Si pas de date subvention, utiliser projet
                 date_fin_subv = subvention[14] or projet_info[1]
+                montant_subvention_max = subvention[15] or None
+                depenses_eligibles_max = subvention[16] or None
                 
                 if mode_simplifie and montant_forfaitaire > 0:
                     # MODE SIMPLIFIÉ : Répartition équitable sur la période de subvention
@@ -1505,7 +1499,6 @@ class CompteResultatDisplay(QDialog):
                                 subvention_total_periode += subvention_annuelle
                                 
                     except ValueError as e:
-                        print(f"Erreur parsing dates subvention: {e}")
                         continue
                         
                 else:
@@ -1518,7 +1511,6 @@ class CompteResultatDisplay(QDialog):
             return subvention_total_periode
             
         except Exception as e:
-            print(f"Erreur dans calculate_smart_distributed_subvention: {e}")
             return 0
     
     def calculate_proportional_subvention_detailed(self, cursor, project_id, subvention, year, month, projet_info):
@@ -1539,23 +1531,14 @@ class CompteResultatDisplay(QDialog):
             taux = subvention[12] or 100
             date_debut_subv = subvention[13] or projet_info[0]
             date_fin_subv = subvention[14] or projet_info[1]
+            montant_subvention_max = subvention[15] or None
+            depenses_eligibles_max = subvention[16] or None
             
-            # DEBUG pour projet test
-            if project_id == 4:
-                print(f"DEBUG SUBVENTION - Projet {project_id}, {year}/{month if month else 'annuel'}")
-                print(f"  depenses_temps_travail: {depenses_temps_travail}, coef: {coef_temps_travail}")
-                print(f"  depenses_externes: {depenses_externes}, coef: {coef_externes}")
-                print(f"  depenses_autres_achats: {depenses_autres_achats}, coef: {coef_autres_achats}")
-                print(f"  cd: {cd}, taux: {taux}")
-                print(f"  période subvention: {date_debut_subv} à {date_fin_subv}")
             
             # 1. Calculer le montant total de la subvention sur la période de subvention
             montant_total_subvention = self.calculate_total_subvention_amount(
-                cursor, project_id, subvention, date_debut_subv, date_fin_subv
+                cursor, project_id, subvention, date_debut_subv, date_fin_subv, montant_subvention_max, depenses_eligibles_max
             )
-            
-            if project_id == 4:
-                print(f"  montant_total_subvention: {montant_total_subvention}")
             
             if montant_total_subvention <= 0:
                 return 0
@@ -1565,9 +1548,6 @@ class CompteResultatDisplay(QDialog):
                 cursor, project_id, subvention, date_debut_subv, date_fin_subv
             )
             
-            if project_id == 4:
-                print(f"  depenses_eligibles_totales: {depenses_eligibles_totales}")
-            
             if depenses_eligibles_totales <= 0:
                 return 0
             
@@ -1576,24 +1556,16 @@ class CompteResultatDisplay(QDialog):
                 cursor, project_id, subvention, year, month
             )
             
-            if project_id == 4:
-                print(f"  depenses_eligibles_periode: {depenses_eligibles_periode}")
-            
             # 4. Calculer la proportion et répartir
             proportion = depenses_eligibles_periode / depenses_eligibles_totales
             subvention_repartie = montant_total_subvention * proportion
             
-            if project_id == 4:
-                print(f"  proportion: {proportion}")
-                print(f"  subvention_repartie: {subvention_repartie}")
-            
             return subvention_repartie
             
         except Exception as e:
-            print(f"Erreur dans calculate_proportional_subvention_detailed: {e}")
             return 0
     
-    def calculate_total_subvention_amount(self, cursor, project_id, subvention, date_debut_subv, date_fin_subv):
+    def calculate_total_subvention_amount(self, cursor, project_id, subvention, date_debut_subv, date_fin_subv, montant_subvention_max=None, depenses_eligibles_max=None):
         """Calcule le montant total de la subvention sur sa période"""
         try:
             # Extraire les paramètres
@@ -1639,12 +1611,21 @@ class CompteResultatDisplay(QDialog):
                 )
                 assiette_totale += amort_total * coef_dotation_amortissements
             
-            # Appliquer cd et taux
-            montant_subvention = assiette_totale * cd * (taux / 100)
+            # Appliquer le plafond du coût éligible max à l'assiette totale
+            assiette_plafonnee = assiette_totale
+            if depenses_eligibles_max and depenses_eligibles_max > 0:
+                assiette_plafonnee = min(assiette_totale, depenses_eligibles_max)
+            
+            # Calculer la subvention avec cd et taux sur l'assiette plafonnée
+            montant_subvention = assiette_plafonnee * cd * (taux / 100)
+            
+            # Appliquer le plafond du montant max si défini
+            if montant_subvention_max and montant_subvention_max > 0:
+                montant_subvention = min(montant_subvention, montant_subvention_max)
+            
             return montant_subvention
             
         except Exception as e:
-            print(f"Erreur dans calculate_total_subvention_amount: {e}")
             return 0
     
     def calculate_total_eligible_expenses(self, cursor, project_id, subvention, date_debut_subv, date_fin_subv):
@@ -1693,7 +1674,6 @@ class CompteResultatDisplay(QDialog):
             return depenses_eligibles
             
         except Exception as e:
-            print(f"Erreur dans calculate_total_eligible_expenses: {e}")
             return 0
     
     def calculate_period_eligible_expenses(self, cursor, project_id, subvention, year, month):
@@ -1871,7 +1851,6 @@ class CompteResultatDisplay(QDialog):
             return total_amort
             
         except Exception as e:
-            print(f"Erreur dans calculate_amortissements_for_period: {e}")
             return 0
     
     def calculate_monthly_distributed_subvention(self, cursor, project_id, subvention_data, year, month, projet_info):
@@ -1910,7 +1889,6 @@ class CompteResultatDisplay(QDialog):
             return subvention_mensuelle
             
         except Exception as e:
-            print(f"Erreur dans calculate_monthly_distributed_subvention: {e}")
             return 0
     
     def calculate_smart_distributed_cir(self, cursor, year, month):
@@ -1950,7 +1928,6 @@ class CompteResultatDisplay(QDialog):
                 return self.calculate_annual_distributed_cir(cursor, cir_project_ids, year, k1, k2, k3)
                 
         except Exception as e:
-            print(f"Erreur dans calculate_smart_distributed_cir: {e}")
             return 0
     
     def calculate_monthly_distributed_cir(self, cursor, cir_project_ids, year, month, k1, k2, k3):
@@ -1997,7 +1974,6 @@ class CompteResultatDisplay(QDialog):
                     depenses_eligibles_annuelles += (cout_temps_annuel * k1) + (amort_annuel * k2)
                     
                 except Exception as e:
-                    print(f"Erreur traitement projet {project_id}: {e}")
                     continue
             
             if depenses_eligibles_annuelles <= 0:
@@ -2036,7 +2012,6 @@ class CompteResultatDisplay(QDialog):
                     depenses_eligibles_mois += (cout_temps_mois * k1) + (amort_mois * k2)
                     
                 except Exception as e:
-                    print(f"Erreur traitement projet {project_id} mois {month}: {e}")
                     continue
             
             # 4. Calculer la proportion et répartir le CIR
@@ -2053,7 +2028,6 @@ class CompteResultatDisplay(QDialog):
                     return 0
                     
         except Exception as e:
-            print(f"Erreur dans calculate_monthly_distributed_cir: {e}")
             return 0
     
     def calculate_annual_distributed_cir(self, cursor, cir_project_ids, year, k1, k2, k3):
@@ -2097,7 +2071,6 @@ class CompteResultatDisplay(QDialog):
                     total_subventions += subv
                     
                 except Exception as e:
-                    print(f"Erreur traitement projet {project_id}: {e}")
                     continue
             
             # Calculer le CIR
@@ -2111,7 +2084,6 @@ class CompteResultatDisplay(QDialog):
             return max(0, cir_total)  # Le CIR ne peut pas être négatif
             
         except Exception as e:
-            print(f"Erreur dans calculate_annual_distributed_cir: {e}")
             return 0
 
     def calculate_proportional_distributed_subvention(self, cursor, project_id, year, month, projet_info):
@@ -2133,7 +2105,7 @@ class CompteResultatDisplay(QDialog):
                 SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                        depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
                        depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                       date_debut_subvention, date_fin_subvention
+                       date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
                 FROM subventions WHERE projet_id = ?
             ''', (project_id,))
             
@@ -2179,7 +2151,6 @@ class CompteResultatDisplay(QDialog):
             return subvention_total_periode
             
         except Exception as e:
-            print(f"Erreur dans calculate_proportional_distributed_subvention: {e}")
             traceback.print_exc()
             return 0
     
@@ -2194,7 +2165,8 @@ class CompteResultatDisplay(QDialog):
             cursor.execute('''
                 SELECT mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
                        depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
-                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux 
+                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                       date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
                 FROM subventions WHERE projet_id = ?
             ''', (project_id,))
             
@@ -2215,11 +2187,15 @@ class CompteResultatDisplay(QDialog):
             
             for subvention in subventions_config:
                 (mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, 
-                 dep_amort, coef_amort, cd, taux) = subvention
+                 dep_amort, coef_amort, cd, taux, date_debut_subv, date_fin_subv, montant_subvention_max, depenses_eligibles_max) = subvention
                 
                 if mode_simplifie:
                     # Mode simplifié : utiliser directement le montant forfaitaire
-                    montant_total_projet += montant_forfaitaire
+                    montant_subvention = montant_forfaitaire
+                    # Appliquer le plafond du montant max si défini
+                    if montant_subvention_max and montant_subvention_max > 0:
+                        montant_subvention = min(montant_subvention, montant_subvention_max)
+                    montant_total_projet += montant_subvention
                 else:
                     # Mode détaillé : calculer selon les coefficients
                     montant_subvention_config = 0
@@ -2254,8 +2230,21 @@ class CompteResultatDisplay(QDialog):
                             cursor, project_id, projet_info)
                         montant_subvention_config += coef_amort * amortissements_total
                     
-                    # Appliquer le taux de subvention
-                    montant_subvention_config = montant_subvention_config * (taux / 100)
+                    # Calculer l'assiette éligible (avant application du taux)
+                    assiette_eligible = montant_subvention_config
+                    
+                    # Appliquer le plafond du coût éligible max à l'assiette
+                    assiette_plafonnee = assiette_eligible
+                    if depenses_eligibles_max and depenses_eligibles_max > 0:
+                        assiette_plafonnee = min(assiette_eligible, depenses_eligibles_max)
+                    
+                    # Appliquer le taux de subvention sur l'assiette plafonnée
+                    montant_subvention_config = assiette_plafonnee * (taux / 100)
+                    
+                    # Appliquer le plafond du montant max si défini
+                    if montant_subvention_max and montant_subvention_max > 0:
+                        montant_subvention_config = min(montant_subvention_config, montant_subvention_max)
+                    
                     montant_total_projet += montant_subvention_config
             
             # Calculer le nombre total de mois du projet
@@ -2274,7 +2263,6 @@ class CompteResultatDisplay(QDialog):
                 return (montant_total_projet / nb_mois_total) * nb_mois_annee
             
         except Exception as e:
-            print(f"Erreur dans calculate_simple_distributed_subvention: {e}")
             return 0
     
     def calculate_temps_travail_total(self, cursor, project_id):
@@ -2640,7 +2628,6 @@ class CompteResultatDisplay(QDialog):
                     return sum(montant for _, montant in depenses_par_mois)
                     
         except Exception as e:
-            print(f"Erreur dans calculate_redistributed_expenses: {e}")
             return 0
 
 def show_compte_resultat(parent, config_data):
