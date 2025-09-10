@@ -1064,7 +1064,7 @@ class PrintConfigDialog(QDialog):
         try:
             from compte_resultat_display import show_compte_resultat
             show_compte_resultat(self.parent, config_data)
-            self.accept()
+            # Ne pas fermer le dialogue avec self.accept() pour permettre de générer plusieurs comptes de résultat
         except ImportError as e:
             QMessageBox.critical(self, "Erreur", f"Impossible d'importer le module compte_resultat_display: {str(e)}")
         except Exception as e:
