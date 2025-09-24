@@ -454,27 +454,27 @@ class CompteResultatDisplay(QDialog):
         except Exception as e:
             data['autres_achats'] = 0
         
-        # 5. COÛT DIRECT - temps_travail * (type de coût sélectionné)
+        # 5. COÛT DIRECT - temps_travail * (type de coût sélectionné) AVEC REDISTRIBUTION AUTOMATIQUE
         try:
-            query = f"""
-                SELECT COALESCE(SUM(t.jours * c.{self.cost_type}), 0)
-                FROM temps_travail t
-                JOIN categorie_cout c ON t.categorie = c.libelle AND t.annee = c.annee
-                WHERE t.annee = {year} {month_condition.replace('mois', 't.mois') if month_condition else ''} 
-                AND t.projet_id IN ({','.join(['?'] * len(self.project_ids))})
-            """
-            cursor.execute(query, self.project_ids)
-            data['cout_direct'] = cursor.fetchone()[0] or 0
+            # NOUVELLE LOGIQUE : Utiliser la redistribution automatique pour chaque projet
+            cout_direct_total = 0
+            nb_jours_total = 0
             
-            # Calculer le nombre total de jours
-            query_jours = f"""
-                SELECT COALESCE(SUM(t.jours), 0)
-                FROM temps_travail t
-                WHERE t.annee = {year} {month_condition.replace('mois', 't.mois') if month_condition else ''} 
-                AND t.projet_id IN ({','.join(['?'] * len(self.project_ids))})
-            """
-            cursor.execute(query_jours, self.project_ids)
-            data['nb_jours_total'] = cursor.fetchone()[0] or 0
+            for project_id in self.project_ids:
+                # Utiliser la nouvelle méthode avec redistribution automatique
+                cout_project = self.calculate_redistributed_temps_travail(
+                    cursor, project_id, year, month, self.cost_type
+                )
+                cout_direct_total += cout_project
+                
+                # Calculer aussi le nombre de jours avec la même logique
+                nb_jours_project = self.calculate_redistributed_temps_travail_jours(
+                    cursor, project_id, year, month
+                )
+                nb_jours_total += nb_jours_project
+            
+            data['cout_direct'] = cout_direct_total
+            data['nb_jours_total'] = nb_jours_total
             
             # Calculer le coût moyen par jour
             if data['nb_jours_total'] > 0:
@@ -707,11 +707,47 @@ class CompteResultatDisplay(QDialog):
                 year_subvention = 0
                 for project_id in valid_projects_for_year:
                     if project_id in valid_years_per_project:
-                        projet_info = (valid_years_per_project[project_id]['debut'].strftime('%m/%Y'),
-                                     valid_years_per_project[project_id]['fin'].strftime('%m/%Y'))
-                        subv = self.calculate_proportional_distributed_subvention(
-                            cursor, project_id, year, None, projet_info)
-                        year_subvention += subv
+                        # CORRECTION: Utiliser directement SubventionDialog.calculate_distributed_subvention
+                        try:
+                            # Récupérer les paramètres de subvention
+                            cursor.execute('''
+                                SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                                       depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                                       date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
+                                FROM subventions WHERE projet_id = ?
+                            ''', (project_id,))
+                            
+                            subventions_config = cursor.fetchall()
+                            
+                            for subvention in subventions_config:
+                                # Construire le dictionnaire de données de subvention
+                                subvention_data = {
+                                    'nom': subvention[0],
+                                    'mode_simplifie': subvention[1],
+                                    'montant_forfaitaire': subvention[2] or 0,
+                                    'depenses_temps_travail': subvention[3] or 0,
+                                    'coef_temps_travail': subvention[4] or 1,
+                                    'depenses_externes': subvention[5] or 0,
+                                    'coef_externes': subvention[6] or 1,
+                                    'depenses_autres_achats': subvention[7] or 0,
+                                    'coef_autres_achats': subvention[8] or 1,
+                                    'depenses_dotation_amortissements': subvention[9] or 0,
+                                    'coef_dotation_amortissements': subvention[10] or 1,
+                                    'cd': subvention[11] or 1,
+                                    'taux': subvention[12] or 100,
+                                    'date_debut_subvention': subvention[13],
+                                    'date_fin_subvention': subvention[14]
+                                }
+                                
+                                # Utiliser la méthode statique de SubventionDialog
+                                from subvention_dialog import SubventionDialog
+                                montant_subv = SubventionDialog.calculate_distributed_subvention(
+                                    project_id, subvention_data, year)
+                                year_subvention += montant_subv
+                        except Exception as e:
+                            # En cas d'erreur, continuer avec 0
+                            pass
                 total_subventions += year_subvention
             
             # 2. Utiliser les coefficients de la première année disponible
@@ -2627,6 +2663,264 @@ class CompteResultatDisplay(QDialog):
                     # Cas annuel : sommer toutes les dépenses
                     return sum(montant for _, montant in depenses_par_mois)
                     
+        except Exception as e:
+            return 0
+    
+    def calculate_redistributed_temps_travail(self, cursor, project_id, year, month, cost_type):
+        """
+        Calcule le temps de travail avec la logique de redistribution automatique.
+        
+        RÈGLE DE REDISTRIBUTION :
+        - Vérifier que TOUS les couples (membre_id, categorie) du projet/année n'ont qu'une seule entrée de mois
+        - Si OUI : redistribuer chaque couple individuellement sur tous les mois actifs du projet
+        - Si NON : utiliser les données réelles (pas de redistribution)
+        
+        Args:
+            cursor: Curseur de base de données
+            project_id: ID du projet
+            year: Année cible
+            month: Mois cible (None pour toute l'année)
+            cost_type: Type de coût ('montant_charge', 'cout_production', 'cout_complet')
+        
+        Returns:
+            float: Coût du temps de travail pour la période demandée
+        """
+        try:
+            # Récupérer les dates du projet pour calculer les mois actifs
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+            projet_info = cursor.fetchone()
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+                
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
+            # Vérifier si l'année est dans la période du projet
+            if year < debut_projet.year or year > fin_projet.year:
+                return 0
+            
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            # 1. VÉRIFICATION : Est-ce que tous les couples (membre_id, categorie) n'ont qu'une seule entrée dans l'année ?
+            cursor.execute("""
+                SELECT membre_id, categorie, COUNT(*) as nb_entries
+                FROM temps_travail 
+                WHERE projet_id = ? AND annee = ?
+                GROUP BY membre_id, categorie
+            """, (project_id, year))
+            
+            couples_entries = cursor.fetchall()
+            
+            # Si aucune donnée, retourner 0
+            if not couples_entries:
+                return 0
+            
+            # Vérifier si TOUS les couples n'ont qu'une seule entrée
+            all_single_entry = all(nb_entries == 1 for _, _, nb_entries in couples_entries)
+            
+            if not all_single_entry:
+                # Au moins un couple a plusieurs entrées → PAS DE REDISTRIBUTION
+                # Utiliser les données réelles
+                return self._calculate_real_temps_travail(cursor, project_id, year, month, cost_type)
+            
+            # 2. REDISTRIBUTION : Tous les couples n'ont qu'une seule entrée
+            # Calculer les mois actifs du projet dans cette année
+            mois_actifs = []
+            for m in range(1, 13):
+                mois_date = datetime.datetime(year, m, 1)
+                if debut_projet <= mois_date <= fin_projet:
+                    mois_actifs.append(m)
+            
+            if not mois_actifs:
+                return 0
+            
+            # Récupérer toutes les données de temps de travail de l'année
+            cursor.execute("""
+                SELECT membre_id, categorie, mois, jours
+                FROM temps_travail 
+                WHERE projet_id = ? AND annee = ?
+            """, (project_id, year))
+            
+            temps_travail_data = cursor.fetchall()
+            
+            # Calculer le coût total redistributed
+            cout_total = 0
+            
+            for membre_id, categorie, mois_original, jours_total in temps_travail_data:
+                # Récupérer le coût unitaire pour cette catégorie/année
+                cursor.execute(f"""
+                    SELECT {cost_type} 
+                    FROM categorie_cout 
+                    WHERE libelle = ? AND annee = ?
+                """, (categorie, year))
+                
+                cout_unitaire = cursor.fetchone()
+                if not cout_unitaire or not cout_unitaire[0]:
+                    continue
+                    
+                cout_unitaire = cout_unitaire[0]
+                
+                # Redistribuer les jours sur tous les mois actifs
+                jours_par_mois = jours_total / len(mois_actifs)
+                
+                if month is not None:
+                    # Calcul pour un mois spécifique
+                    if month in mois_actifs:
+                        cout_total += jours_par_mois * cout_unitaire
+                else:
+                    # Calcul pour toute l'année
+                    cout_total += jours_total * cout_unitaire
+            
+            return cout_total
+                    
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return 0
+    
+    def _calculate_real_temps_travail(self, cursor, project_id, year, month, cost_type):
+        """
+        Calcule le temps de travail réel sans redistribution
+        """
+        try:
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            if month is not None:
+                # Calcul pour un mois spécifique
+                cursor.execute(f"""
+                    SELECT COALESCE(SUM(t.jours * c.{cost_type}), 0)
+                    FROM temps_travail t
+                    JOIN categorie_cout c ON t.categorie = c.libelle AND t.annee = c.annee
+                    WHERE t.projet_id = ? AND t.annee = ? AND t.mois = ?
+                """, (project_id, year, month_names[month-1]))
+            else:
+                # Calcul pour toute l'année
+                cursor.execute(f"""
+                    SELECT COALESCE(SUM(t.jours * c.{cost_type}), 0)
+                    FROM temps_travail t
+                    JOIN categorie_cout c ON t.categorie = c.libelle AND t.annee = c.annee
+                    WHERE t.projet_id = ? AND t.annee = ?
+                """, (project_id, year))
+            
+            result = cursor.fetchone()
+            return result[0] if result else 0
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_redistributed_temps_travail_jours(self, cursor, project_id, year, month):
+        """
+        Calcule le nombre de jours de temps de travail avec la même logique de redistribution
+        """
+        try:
+            # Récupérer les dates du projet pour calculer les mois actifs
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+            projet_info = cursor.fetchone()
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                return 0
+                
+            debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+            fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
+            
+            # Vérifier si l'année est dans la période du projet
+            if year < debut_projet.year or year > fin_projet.year:
+                return 0
+            
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            # 1. VÉRIFICATION : Est-ce que tous les couples (membre_id, categorie) n'ont qu'une seule entrée dans l'année ?
+            cursor.execute("""
+                SELECT membre_id, categorie, COUNT(*) as nb_entries
+                FROM temps_travail 
+                WHERE projet_id = ? AND annee = ?
+                GROUP BY membre_id, categorie
+            """, (project_id, year))
+            
+            couples_entries = cursor.fetchall()
+            
+            # Si aucune donnée, retourner 0
+            if not couples_entries:
+                return 0
+            
+            # Vérifier si TOUS les couples n'ont qu'une seule entrée
+            all_single_entry = all(nb_entries == 1 for _, _, nb_entries in couples_entries)
+            
+            if not all_single_entry:
+                # Au moins un couple a plusieurs entrées → PAS DE REDISTRIBUTION
+                # Utiliser les données réelles
+                return self._calculate_real_temps_travail_jours(cursor, project_id, year, month)
+            
+            # 2. REDISTRIBUTION : Tous les couples n'ont qu'une seule entrée
+            # Calculer les mois actifs du projet dans cette année
+            mois_actifs = []
+            for m in range(1, 13):
+                mois_date = datetime.datetime(year, m, 1)
+                if debut_projet <= mois_date <= fin_projet:
+                    mois_actifs.append(m)
+            
+            if not mois_actifs:
+                return 0
+            
+            # Récupérer toutes les données de temps de travail de l'année
+            cursor.execute("""
+                SELECT membre_id, categorie, mois, jours
+                FROM temps_travail 
+                WHERE projet_id = ? AND annee = ?
+            """, (project_id, year))
+            
+            temps_travail_data = cursor.fetchall()
+            
+            # Calculer le nombre total de jours redistributed
+            jours_total = 0
+            
+            for membre_id, categorie, mois_original, jours_original in temps_travail_data:
+                # Redistribuer les jours sur tous les mois actifs
+                jours_par_mois = jours_original / len(mois_actifs)
+                
+                if month is not None:
+                    # Calcul pour un mois spécifique
+                    if month in mois_actifs:
+                        jours_total += jours_par_mois
+                else:
+                    # Calcul pour toute l'année
+                    jours_total += jours_original
+            
+            return jours_total
+                    
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return 0
+    
+    def _calculate_real_temps_travail_jours(self, cursor, project_id, year, month):
+        """
+        Calcule le nombre de jours de temps de travail réel sans redistribution
+        """
+        try:
+            month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                          "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+            
+            if month is not None:
+                # Calcul pour un mois spécifique
+                cursor.execute("""
+                    SELECT COALESCE(SUM(jours), 0)
+                    FROM temps_travail
+                    WHERE projet_id = ? AND annee = ? AND mois = ?
+                """, (project_id, year, month_names[month-1]))
+            else:
+                # Calcul pour toute l'année
+                cursor.execute("""
+                    SELECT COALESCE(SUM(jours), 0)
+                    FROM temps_travail
+                    WHERE projet_id = ? AND annee = ?
+                """, (project_id, year))
+            
+            result = cursor.fetchone()
+            return result[0] if result else 0
+            
         except Exception as e:
             return 0
 
