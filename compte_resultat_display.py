@@ -390,14 +390,9 @@ class CompteResultatDisplay(QDialog):
             'credit_impot': 0
         }
         
-        # 1. RECETTES - table recettes
+        # 1. RECETTES - NOUVELLE LOGIQUE avec redistribution automatique
         try:
-            query = f"""
-                SELECT COALESCE(SUM(montant), 0) FROM recettes 
-                WHERE 1=1 {year_condition} {month_condition} {project_condition}
-            """
-            cursor.execute(query, self.project_ids)
-            data['recettes'] = cursor.fetchone()[0] or 0
+            data['recettes'] = self.calculate_redistributed_recettes(cursor, self.project_ids, year, month)
         except sqlite3.OperationalError:
             # Table n'existe pas encore
             data['recettes'] = 0
@@ -2914,6 +2909,91 @@ class CompteResultatDisplay(QDialog):
             
             result = cursor.fetchone()
             return result[0] if result else 0
+            
+        except Exception as e:
+            return 0
+
+    def calculate_redistributed_recettes(self, cursor, project_ids, year, month):
+        """
+        Calcule les recettes avec la logique de redistribution automatique.
+        Si une seule recette existe dans l'année, elle est redistribuée sur tous les mois actifs.
+        
+        Args:
+            cursor: Curseur de base de données
+            project_ids: Liste des IDs des projets
+            year: Année cible
+            month: Mois cible (None pour toute l'année)
+        
+        Returns:
+            float: Montant des recettes pour la période demandée
+        """
+        try:
+            total_recettes = 0
+            
+            for project_id in project_ids:
+                # Vérifier les mois actifs du projet pour cette année
+                active_months = self.get_active_months_for_year(year)
+                if not active_months:
+                    continue
+                
+                # 1. Récupérer toutes les recettes du projet pour cette année
+                cursor.execute("""
+                    SELECT DISTINCT mois FROM recettes 
+                    WHERE projet_id = ? AND annee = ?
+                """, (project_id, year))
+                
+                mois_with_data = [row[0] for row in cursor.fetchall()]
+                
+                # 2. Déterminer si redistribution nécessaire
+                # Si une seule entrée de mois ET que ce mois est différent de tous les mois actifs
+                # OU si une seule entrée et on veut une granularité mensuelle
+                should_redistribute = (
+                    len(mois_with_data) == 1 and 
+                    len(active_months) > 1
+                )
+                
+                if should_redistribute:
+                    # REDISTRIBUTION : récupérer le montant total et le répartir
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(montant), 0) FROM recettes 
+                        WHERE projet_id = ? AND annee = ?
+                    """, (project_id, year))
+                    
+                    montant_total = cursor.fetchone()[0] or 0
+                    
+                    if montant_total > 0:
+                        if month is not None:
+                            # Mode mensuel : répartir le montant total sur tous les mois actifs
+                            if month in active_months:
+                                recettes_project = montant_total / len(active_months)
+                            else:
+                                recettes_project = 0
+                        else:
+                            # Mode annuel : retourner le montant total
+                            recettes_project = montant_total
+                    else:
+                        recettes_project = 0
+                        
+                else:
+                    # PAS DE REDISTRIBUTION : utiliser les données réelles
+                    if month is not None:
+                        # Mode mensuel
+                        cursor.execute("""
+                            SELECT COALESCE(SUM(montant), 0) FROM recettes 
+                            WHERE projet_id = ? AND annee = ? AND mois = ?
+                        """, (project_id, year, month))
+                    else:
+                        # Mode annuel
+                        cursor.execute("""
+                            SELECT COALESCE(SUM(montant), 0) FROM recettes 
+                            WHERE projet_id = ? AND annee = ?
+                        """, (project_id, year))
+                    
+                    recettes_project = cursor.fetchone()[0] or 0
+                
+                total_recettes += recettes_project
+            
+            return total_recettes
             
         except Exception as e:
             return 0
