@@ -631,13 +631,15 @@ class BudgetEditDialog(QDialog):
                         
                         # Recrée les données à partir du tableau actuel
                         data = self.recettes_data.get(year, {})
-                        for (ligne_index, mois), (montant, detail) in data.items():
+                        ligne_index = 0
+                        for (_, mois), (montant, detail) in data.items():
                             if montant != 0 or detail.strip():
                                 cursor.execute("""
                                     INSERT OR REPLACE INTO recettes 
                                     (projet_id, annee, ligne_index, mois, montant, detail) 
                                     VALUES (?, ?, ?, ?, ?, ?)
                                 """, (self.projet_id, int(year), ligne_index, mois, montant, detail))
+                                ligne_index += 1
                         
                         conn.commit()
                         conn.close()
@@ -708,8 +710,8 @@ class BudgetEditDialog(QDialog):
                     data[key] = (montant_val, detail)
             
             self.recettes_data[year] = data
-            if data:
-                self.recettes_modified_years.add(year)
+            # Marque toujours l'année comme modifiée, même si data est vide (suppression)
+            self.recettes_modified_years.add(year)
 
         def load_recettes_data_from_db_for_year(self, year, table):
             """Charge les données des recettes depuis la base pour une année spécifique et les met dans le tableau"""
@@ -867,13 +869,13 @@ class BudgetEditDialog(QDialog):
                         
                         # Recrée les données à partir du tableau actuel
                         data = self.depenses_data.get(year, {})
-                        for (row_idx, mois), (montant, detail) in data.items():
+                        for (ligne_nom, mois), (montant, detail) in data.items():
                             if montant != 0 or detail.strip():
                                 cursor.execute("""
                                     INSERT OR REPLACE INTO depenses 
                                     (projet_id, annee, categorie, mois, montant, detail) 
                                     VALUES (?, ?, ?, ?, ?, ?)
-                                """, (self.projet_id, int(year), detail, mois, montant, detail))
+                                """, (self.projet_id, int(year), ligne_nom, mois, montant, detail))
                         
                         conn.commit()
                         conn.close()
@@ -940,8 +942,8 @@ class BudgetEditDialog(QDialog):
                     key = (f"Ligne {row+1}", mois)
                     data[key] = (montant_val, detail)
             self.depenses_data[year] = data
-            if data:
-                self.depenses_modified_years.add(year)
+            # Marque toujours l'année comme modifiée, même si data est vide (suppression)
+            self.depenses_modified_years.add(year)
 
         def load_depenses_data_from_db_for_year(self, year, table):
             conn = sqlite3.connect('gestion_budget.db')
@@ -1096,13 +1098,15 @@ class BudgetEditDialog(QDialog):
                         
                         # Recrée les données à partir du tableau actuel
                         data = self.autres_depenses_data.get(year, {})
-                        for (ligne_index, mois), (montant, detail) in data.items():
+                        ligne_index = 0
+                        for (_, mois), (montant, detail) in data.items():
                             if montant != 0 or detail.strip():
                                 cursor.execute("""
                                     INSERT OR REPLACE INTO autres_depenses 
                                     (projet_id, annee, ligne_index, mois, montant, detail) 
                                     VALUES (?, ?, ?, ?, ?, ?)
                                 """, (self.projet_id, int(year), ligne_index, mois, montant, detail))
+                                ligne_index += 1
                         
                         conn.commit()
                         conn.close()
@@ -1169,8 +1173,8 @@ class BudgetEditDialog(QDialog):
                     key = (row, mois)
                     data[key] = (montant_val, detail)
             self.autres_depenses_data[year] = data
-            if data:
-                self.autres_depenses_modified_years.add(year)
+            # Marque toujours l'année comme modifiée, même si data est vide (suppression)
+            self.autres_depenses_modified_years.add(year)
 
         def load_autres_depenses_data_from_db_for_year(self, year, table):
             conn = sqlite3.connect('gestion_budget.db')
@@ -1300,36 +1304,47 @@ class BudgetEditDialog(QDialog):
 
             # Sauvegarde seulement les années modifiées pour les recettes
             for annee in self.recettes_modified_years:
+                # Toujours supprimer les anciennes données, même si pas de nouvelles données
+                cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                
                 data = self.recettes_data.get(annee, {})
-                if data:  # Seulement si il y a des données
-                    cursor.execute("DELETE FROM recettes WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                if data:  # Seulement si il y a des données à insérer
+                    ligne_index = 0
                     for key, (montant, detail) in data.items():
                         if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                            ligne_index, mois = key
+                            _, mois = key
                             cursor.execute("INSERT INTO recettes (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
                                          (self.projet_id, int(annee), ligne_index, mois, montant or 0, detail or ""))
+                            ligne_index += 1
 
             # Sauvegarde seulement les années modifiées pour les dépenses
             for annee in self.depenses_modified_years:
+                # Toujours supprimer les anciennes données, même si pas de nouvelles données
+                cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                
                 data = self.depenses_data.get(annee, {})
-                if data:  # Seulement si il y a des données
-                    cursor.execute("DELETE FROM depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                if data:  # Seulement si il y a des données à insérer
                     for key, (montant, detail) in data.items():
                         if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                            categorie, mois = key
+                            ligne_nom, mois = key  # La clé est (f"Ligne {row+1}", mois)
+                            # Utilise le nom de ligne comme catégorie générique pour ce système simplifié
                             cursor.execute("INSERT INTO depenses (projet_id, annee, categorie, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
-                                         (self.projet_id, int(annee), categorie, mois, montant or 0, detail or ""))
+                                         (self.projet_id, int(annee), ligne_nom, mois, montant or 0, detail or ""))
 
             # Sauvegarde seulement les années modifiées pour les autres dépenses
             for annee in self.autres_depenses_modified_years:
+                # Toujours supprimer les anciennes données, même si pas de nouvelles données
+                cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                
                 data = self.autres_depenses_data.get(annee, {})
-                if data:  # Seulement si il y a des données
-                    cursor.execute("DELETE FROM autres_depenses WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                if data:  # Seulement si il y a des données à insérer
+                    ligne_index = 0
                     for key, (montant, detail) in data.items():
                         if montant or detail:  # Ne sauvegarde que si au moins un champ est rempli
-                            ligne_index, mois = key
+                            _, mois = key
                             cursor.execute("INSERT INTO autres_depenses (projet_id, annee, ligne_index, mois, montant, detail) VALUES (?, ?, ?, ?, ?, ?)", 
                                          (self.projet_id, int(annee), ligne_index, mois, montant or 0, detail or ""))
+                            ligne_index += 1
 
             conn.commit()
             conn.close()
@@ -1341,6 +1356,9 @@ class BudgetEditDialog(QDialog):
             self.autres_depenses_modified_years.clear()
 
             QMessageBox.information(self, "Enregistrement", "Toutes les données ont été enregistrées.")
+            
+            # Ferme la fenêtre après enregistrement
+            self.accept()
 
         btn_save_all.clicked.connect(save_all_to_db)
 
