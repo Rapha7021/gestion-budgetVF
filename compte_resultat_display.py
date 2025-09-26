@@ -1483,8 +1483,9 @@ class CompteResultatDisplay(QDialog):
     
     def calculate_smart_distributed_subvention(self, cursor, project_id, year, month, projet_info):
         """
-        CORRECTION: Utilise directement la méthode SubventionDialog.calculate_distributed_subvention 
-        pour garantir la cohérence avec les autres modules
+        Calcule les subventions avec une logique de répartition adaptée au compte de résultat :
+        - Si dates de subvention définies : utilise la méthode SubventionDialog
+        - Sinon : répartit intelligemment selon la granularité (mensuelle ou annuelle)
         """
         try:
             # Récupérer toutes les subventions pour ce projet
@@ -1527,13 +1528,248 @@ class CompteResultatDisplay(QDialog):
                     'depenses_eligibles_max': subvention[16]
                 }
                 
-                # Utiliser la méthode de référence de SubventionDialog
-                subvention_periode = SubventionDialog.calculate_distributed_subvention(
-                    project_id, subvention_data, year, month
-                )
+                # Utiliser la logique de redistribution du compte de résultat pour les subventions
+                if subvention[13] and subvention[14]:  # dates de subvention définies
+                    # Utiliser la méthode adaptée au compte de résultat qui comprend la redistribution
+                    subvention_periode = self.calculate_subvention_with_redistribution(
+                        cursor, project_id, subvention_data, year, month, subvention[13], subvention[14]
+                    )
+                else:
+                    # Pas de dates de subvention définies : utiliser une répartition adaptée au compte de résultat
+                    if month is not None:
+                        # Granularité mensuelle : répartir la subvention annuelle sur les mois actifs
+                        subvention_periode = self.calculate_monthly_subvention_fallback(
+                            cursor, project_id, subvention_data, year, month, projet_info
+                        )
+                    else:
+                        # Granularité annuelle : calculer pour toute l'année
+                        subvention_periode = SubventionDialog.calculate_distributed_subvention(
+                            project_id, subvention_data, year, None
+                        )
+                
                 subvention_total_periode += subvention_periode
             
             return subvention_total_periode
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_subvention_with_redistribution(self, cursor, project_id, subvention_data, year, month, date_debut, date_fin):
+        """
+        Calcule la subvention en utilisant la même logique de redistribution que le compte de résultat.
+        
+        Cette méthode :
+        1. Vérifie si le mois est dans la période de subvention
+        2. Utilise la redistribution automatique pour calculer les dépenses éligibles du mois
+        3. Calcule la subvention proportionnellement à ces dépenses redistribuées
+        """
+        try:
+            import datetime
+            
+            # Vérifier si le mois demandé est dans la période de subvention
+            try:
+                debut_subv = datetime.datetime.strptime(date_debut, '%m/%Y')
+                fin_subv = datetime.datetime.strptime(date_fin, '%m/%Y')
+                
+                if month is not None:
+                    target_date = datetime.datetime(year, month, 1)
+                    if target_date < debut_subv or target_date > fin_subv:
+                        return 0  # Mois hors période de subvention
+                else:
+                    # Mode annuel : vérifier qu'au moins un mois de l'année est dans la période
+                    year_start = datetime.datetime(year, 1, 1)
+                    year_end = datetime.datetime(year, 12, 1)
+                    if year_end < debut_subv or year_start > fin_subv:
+                        return 0
+                        
+            except ValueError:
+                return 0
+            
+            # Calculer le montant total de la subvention sur toute la période
+            montant_total_subvention = self.calculate_total_subvention_amount_with_redistribution(
+                cursor, project_id, subvention_data, date_debut, date_fin
+            )
+            
+            if montant_total_subvention <= 0:
+                return 0
+            
+            # Calculer les dépenses éligibles totales sur la période de subvention (avec redistribution)
+            depenses_eligibles_totales = self.calculate_total_eligible_expenses_with_redistribution(
+                cursor, project_id, subvention_data, date_debut, date_fin
+            )
+            
+            if depenses_eligibles_totales <= 0:
+                return 0
+            
+            # Calculer les dépenses éligibles pour la période demandée (avec redistribution)
+            depenses_eligibles_periode = self.calculate_period_eligible_expenses_with_redistribution(
+                cursor, project_id, subvention_data, year, month
+            )
+            
+            # Calculer la proportion et retourner le montant réparti
+            proportion = depenses_eligibles_periode / depenses_eligibles_totales
+            montant_reparti = montant_total_subvention * proportion
+            
+            return montant_reparti
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_total_subvention_amount_with_redistribution(self, cursor, project_id, subvention_data, date_debut, date_fin):
+        """Calcule le montant total de la subvention en utilisant les dépenses redistribuées"""
+        try:
+            import datetime
+            
+            # Mode de calcul
+            if subvention_data.get('mode_simplifie', 0):
+                return float(subvention_data.get('montant_forfaitaire', 0))
+            
+            # Mode détaillé : calculer sur toute la période de subvention
+            debut_subv = datetime.datetime.strptime(date_debut, '%m/%Y')
+            fin_subv = datetime.datetime.strptime(date_fin, '%m/%Y')
+            
+            assiette_totale = 0
+            
+            # Parcourir tous les mois de la période de subvention
+            current_date = debut_subv
+            while current_date <= fin_subv:
+                # Calculer les dépenses éligibles pour ce mois avec redistribution
+                depenses_mois = self.calculate_period_eligible_expenses_with_redistribution(
+                    cursor, project_id, subvention_data, current_date.year, current_date.month
+                )
+                assiette_totale += depenses_mois
+                
+                # Passer au mois suivant
+                if current_date.month == 12:
+                    current_date = current_date.replace(year=current_date.year + 1, month=1)
+                else:
+                    current_date = current_date.replace(month=current_date.month + 1)
+            
+            # Appliquer les plafonds si définis
+            depenses_eligibles_max = subvention_data.get('depenses_eligibles_max', 0)
+            if depenses_eligibles_max and depenses_eligibles_max > 0:
+                assiette_totale = min(assiette_totale, depenses_eligibles_max)
+            
+            # Calculer la subvention
+            taux = subvention_data.get('taux', 100) / 100
+            montant_subvention = assiette_totale * taux
+            
+            # Appliquer le plafond du montant max si défini
+            montant_subvention_max = subvention_data.get('montant_subvention_max', 0)
+            if montant_subvention_max and montant_subvention_max > 0:
+                montant_subvention = min(montant_subvention, montant_subvention_max)
+            
+            return montant_subvention
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_total_eligible_expenses_with_redistribution(self, cursor, project_id, subvention_data, date_debut, date_fin):
+        """Calcule les dépenses éligibles totales avec redistribution"""
+        try:
+            import datetime
+            
+            debut_subv = datetime.datetime.strptime(date_debut, '%m/%Y')
+            fin_subv = datetime.datetime.strptime(date_fin, '%m/%Y')
+            
+            depenses_totales = 0
+            
+            # Parcourir tous les mois de la période de subvention
+            current_date = debut_subv
+            while current_date <= fin_subv:
+                depenses_mois = self.calculate_period_eligible_expenses_with_redistribution(
+                    cursor, project_id, subvention_data, current_date.year, current_date.month
+                )
+                depenses_totales += depenses_mois
+                
+                # Passer au mois suivant
+                if current_date.month == 12:
+                    current_date = current_date.replace(year=current_date.year + 1, month=1)
+                else:
+                    current_date = current_date.replace(month=current_date.month + 1)
+            
+            return depenses_totales
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_period_eligible_expenses_with_redistribution(self, cursor, project_id, subvention_data, year, month):
+        """Calcule les dépenses éligibles pour une période en utilisant la redistribution du compte de résultat"""
+        try:
+            depenses_eligibles = 0
+            
+            # Temps de travail éligible avec redistribution
+            if subvention_data.get('depenses_temps_travail', 0):
+                coef_temps = subvention_data.get('coef_temps_travail', 1.0)
+                cd = subvention_data.get('cd', 1.0)
+                
+                # Utiliser la même logique de redistribution que le compte de résultat
+                cout_temps_travail = self.calculate_redistributed_temps_travail(
+                    cursor, project_id, year, month, 'montant_charge'
+                )
+                depenses_eligibles += cout_temps_travail * coef_temps * cd
+            
+            # Dépenses externes éligibles avec redistribution
+            if subvention_data.get('depenses_externes', 0):
+                coef_externes = subvention_data.get('coef_externes', 1.0)
+                depenses_externes = self.calculate_redistributed_expenses(
+                    cursor, project_id, year, month, 'depenses'
+                )
+                depenses_eligibles += depenses_externes * coef_externes
+            
+            # Autres dépenses éligibles avec redistribution
+            if subvention_data.get('depenses_autres_achats', 0):
+                coef_autres = subvention_data.get('coef_autres_achats', 1.0)
+                autres_depenses = self.calculate_redistributed_expenses(
+                    cursor, project_id, year, month, 'autres_depenses'
+                )
+                depenses_eligibles += autres_depenses * coef_autres
+            
+            # Amortissements éligibles
+            if subvention_data.get('depenses_dotation_amortissements', 0):
+                coef_amort = subvention_data.get('coef_dotation_amortissements', 1.0)
+                amortissements = self.calculate_amortissement_for_period(
+                    cursor, project_id, year, month
+                )
+                depenses_eligibles += amortissements * coef_amort
+            
+            return depenses_eligibles
+            
+        except Exception as e:
+            return 0
+    
+    def calculate_monthly_subvention_fallback(self, cursor, project_id, subvention_data, year, month, projet_info):
+        """
+        Méthode de fallback pour la répartition mensuelle des subventions 
+        quand les dates de subvention ne sont pas définies.
+        
+        Stratégie :
+        1. Calculer le montant total annuel de la subvention
+        2. Déterminer les mois actifs du projet pour cette année
+        3. Répartir équitablement sur tous les mois actifs
+        """
+        try:
+            # Importer SubventionDialog pour utiliser ses méthodes
+            from subvention_dialog import SubventionDialog
+            
+            # 1. Calculer le montant total annuel de cette subvention
+            subvention_annuelle = SubventionDialog.calculate_distributed_subvention(
+                project_id, subvention_data, year, None
+            )
+            
+            if subvention_annuelle <= 0:
+                return 0
+            
+            # 2. Déterminer les mois actifs pour cette année
+            active_months = self.get_active_months_for_year(year)
+            
+            if not active_months or month not in active_months:
+                return 0
+            
+            # 3. Répartir équitablement sur tous les mois actifs
+            subvention_mensuelle = subvention_annuelle / len(active_months)
+            
+            return subvention_mensuelle
             
         except Exception as e:
             return 0
