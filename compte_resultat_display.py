@@ -922,7 +922,25 @@ class CompteResultatDisplay(QDialog):
             self.table.setItem(row, 0, item)
             
             # Colonnes de données
-            for col, period in enumerate(sorted(data.keys()), 1):
+            # Trier les clés chronologiquement pour la granularité mensuelle
+            if self.granularity == 'monthly':
+                # Créer une liste de tuples (année, mois, clé) pour un tri chronologique correct
+                period_tuples = []
+                for key in data.keys():
+                    if '/' in key:  # Format "MM/YYYY"
+                        parts = key.split('/')
+                        month_num = int(parts[0])
+                        year_num = int(parts[1])
+                        period_tuples.append((year_num, month_num, key))
+                
+                # Trier par année puis par mois
+                period_tuples.sort(key=lambda x: (x[0], x[1]))
+                sorted_periods = [t[2] for t in period_tuples]
+            else:
+                # Pour la granularité annuelle, le tri alphabétique fonctionne
+                sorted_periods = sorted(data.keys())
+            
+            for col, period in enumerate(sorted_periods, 1):
                 if data_key == "separator" or data_key == "header":
                     # Lignes vides ou en-têtes
                     self.table.setItem(row, col, QTableWidgetItem(""))
