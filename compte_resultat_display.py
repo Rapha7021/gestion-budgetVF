@@ -1470,9 +1470,8 @@ class CompteResultatDisplay(QDialog):
     
     def calculate_smart_distributed_subvention(self, cursor, project_id, year, month, projet_info):
         """
-        Calcule la subvention avec une répartition intelligente basée sur les vraies données :
-        - Mode simplifié : répartit le montant forfaitaire équitablement sur tous les mois de la période
-        - Mode détaillé : utilise la méthode proportionnelle existante
+        CORRECTION: Utilise directement la méthode SubventionDialog.calculate_distributed_subvention 
+        pour garantir la cohérence avec les autres modules
         """
         try:
             # Récupérer toutes les subventions pour ce projet
@@ -1490,59 +1489,36 @@ class CompteResultatDisplay(QDialog):
             
             subvention_total_periode = 0
             
+            # Importer SubventionDialog pour utiliser sa méthode de référence
+            from subvention_dialog import SubventionDialog
+            
             for subvention in subventions_config:
-                mode_simplifie = subvention[1] or 0
-                montant_forfaitaire = subvention[2] or 0
-                date_debut_subv = subvention[13] or projet_info[0]  # Si pas de date subvention, utiliser projet
-                date_fin_subv = subvention[14] or projet_info[1]
-                montant_subvention_max = subvention[15] or None
-                depenses_eligibles_max = subvention[16] or None
+                # Construire le dictionnaire de données de subvention
+                subvention_data = {
+                    'nom': subvention[0],
+                    'mode_simplifie': subvention[1] or 0,
+                    'montant_forfaitaire': subvention[2] or 0,
+                    'depenses_temps_travail': subvention[3] or 0,
+                    'coef_temps_travail': subvention[4] or 1,
+                    'depenses_externes': subvention[5] or 0,
+                    'coef_externes': subvention[6] or 1,
+                    'depenses_autres_achats': subvention[7] or 0,
+                    'coef_autres_achats': subvention[8] or 1,
+                    'depenses_dotation_amortissements': subvention[9] or 0,
+                    'coef_dotation_amortissements': subvention[10] or 1,
+                    'cd': subvention[11] or 1,
+                    'taux': subvention[12] or 100,
+                    'date_debut_subvention': subvention[13],
+                    'date_fin_subvention': subvention[14],
+                    'montant_subvention_max': subvention[15],
+                    'depenses_eligibles_max': subvention[16]
+                }
                 
-                if mode_simplifie and montant_forfaitaire > 0:
-                    # MODE SIMPLIFIÉ : Répartition équitable sur la période de subvention
-                    try:
-                        debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
-                        fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
-                        
-                        # Vérifier si la période demandée est dans la période de subvention
-                        if month is not None:
-                            target_date = datetime.datetime(year, month, 1)
-                            if target_date < debut_subv or target_date > fin_subv:
-                                continue  # Ce mois n'est pas dans la période de subvention
-                            
-                            # Calculer le nombre total de mois dans la période de subvention
-                            nb_mois_subvention = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
-                            
-                            # Répartir équitablement
-                            subvention_mensuelle = montant_forfaitaire / nb_mois_subvention
-                            subvention_total_periode += subvention_mensuelle
-                        else:
-                            # Mode annuel : calculer combien de mois de la subvention tombent dans l'année demandée
-                            year_start = datetime.datetime(year, 1, 1)
-                            year_end = datetime.datetime(year, 12, 1)
-                            
-                            # Intersection entre année demandée et période de subvention
-                            periode_debut = max(debut_subv, year_start)
-                            periode_fin = min(fin_subv, year_end)
-                            
-                            if periode_debut <= periode_fin:
-                                nb_mois_dans_annee = (periode_fin.year - periode_debut.year) * 12 + (periode_fin.month - periode_debut.month) + 1
-                                nb_mois_subvention_total = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
-                                
-                                # Proportion de la subvention pour cette année
-                                proportion_annee = nb_mois_dans_annee / nb_mois_subvention_total
-                                subvention_annuelle = montant_forfaitaire * proportion_annee
-                                subvention_total_periode += subvention_annuelle
-                                
-                    except ValueError as e:
-                        continue
-                        
-                else:
-                    # MODE DÉTAILLÉ : Calculer directement la répartition proportionnelle
-                    subvention_periode = self.calculate_proportional_subvention_detailed(
-                        cursor, project_id, subvention, year, month, projet_info
-                    )
-                    subvention_total_periode += subvention_periode
+                # Utiliser la méthode de référence de SubventionDialog
+                subvention_periode = SubventionDialog.calculate_distributed_subvention(
+                    project_id, subvention_data, year, month
+                )
+                subvention_total_periode += subvention_periode
             
             return subvention_total_periode
             

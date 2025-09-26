@@ -679,7 +679,7 @@ class SubventionDialog(QDialog):
             
             # 4. Calculer les dépenses éligibles totales de la subvention
             depenses_eligibles_totales = SubventionDialog._calculate_total_eligible_expenses(
-                cursor, project_id, subvention_data, debut_subv, fin_subv
+                cursor, project_id, subvention_data, date_debut_subv, date_fin_subv
             )
             
             if depenses_eligibles_totales <= 0:
@@ -697,7 +697,6 @@ class SubventionDialog(QDialog):
             return montant_reparti
             
         except Exception as e:
-            print(f"Erreur dans calculate_distributed_subvention: {e}")
             return 0
         finally:
             conn.close()
@@ -726,7 +725,7 @@ class SubventionDialog(QDialog):
         
         # Calculer les dépenses éligibles sur la période de subvention seulement
         depenses_eligibles_totales = SubventionDialog._calculate_period_eligible_expenses_range(
-            cursor, project_id, subvention_data, debut_subv, fin_subv
+            cursor, project_id, subvention_data, date_debut_subv, date_fin_subv
         )
         
         # Appliquer le taux de subvention
@@ -927,8 +926,17 @@ class SubventionDialog(QDialog):
         return depenses_periode
     
     @staticmethod
-    def _calculate_period_eligible_expenses_range(cursor, project_id, subvention_data, debut_date, fin_date):
+    def _calculate_period_eligible_expenses_range(cursor, project_id, subvention_data, debut_date_str, fin_date_str):
         """Calcule les dépenses éligibles sur une plage de dates"""
+        import datetime
+        
+        try:
+            # Convertir les chaînes de dates en objets datetime
+            debut_date = datetime.datetime.strptime(debut_date_str, '%m/%Y')
+            fin_date = datetime.datetime.strptime(fin_date_str, '%m/%Y')
+        except (ValueError, TypeError):
+            return 0
+        
         # Pour simplifier, on fait la somme des mois dans la plage
         total = 0
         current_date = debut_date.replace(day=1)

@@ -1088,16 +1088,19 @@ class ProjectDetailsDialog(QDialog):
                     'date_fin_subvention': date_fin_subv
                 }
                 
-                # Calculer le montant total estimé avec la nouvelle logique (somme sur toutes les années du projet)
-                montant_total_estime = 0
-                assiette_totale_courante = 0
+                # CORRECTION: Utiliser la même logique que SubventionDialog qui filtre par période de subvention
+                from subvention_dialog import SubventionDialog
                 
-                for annee in annees_projet:
-                    # Calculer l'assiette éligible pour cette année avec la nouvelle logique de redistribution
-                    assiette_annee = self.calculate_period_eligible_expenses_with_redistribution(
-                        cursor, self.projet_id, subvention_data, annee, None
+                if mode_simplifie:
+                    # Mode simplifié: calculer l'assiette totale sur la période de subvention uniquement
+                    assiette_totale_courante = SubventionDialog._calculate_total_eligible_expenses(
+                        cursor, self.projet_id, subvention_data, date_debut_subv, date_fin_subv
                     )
-                    assiette_totale_courante += assiette_annee
+                else:
+                    # Mode détaillé: calculer l'assiette éligible avec coefficients sur la période de subvention
+                    assiette_totale_courante = SubventionDialog._calculate_total_eligible_expenses(
+                        cursor, self.projet_id, subvention_data, date_debut_subv, date_fin_subv
+                    )
                 
                 # Appliquer le plafond du coût éligible max à l'assiette totale
                 assiette_plafonnee = assiette_totale_courante
