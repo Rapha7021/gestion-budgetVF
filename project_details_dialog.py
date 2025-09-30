@@ -938,53 +938,39 @@ class ProjectDetailsDialog(QDialog):
             from compte_resultat_display import CompteResultatDisplay
             temp_compte_resultat = CompteResultatDisplay(self, {'project_ids': [self.projet_id], 'years': list(range(debut_projet.year, fin_projet.year + 1))})
             
-            # Calculer le CIR pour chaque année du projet
+            # Calculer le CIR mois par mois en utilisant la même méthode que le compte de résultat
             current_date = debut_projet
             while current_date <= fin_projet:
                 year = current_date.year
+                month = current_date.month
                 
-                # Calculer le CIR pour cette année en utilisant EXACTEMENT la même méthode que le compte de résultat
-                cir_annuel = temp_compte_resultat.calculate_distributed_cir(cursor, year)
+                # Calculer les éléments pour ce mois EXACTEMENT comme dans le compte de résultat
+                temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
+                    cursor, self.projet_id, year, month, 'montant_charge'
+                )
+                amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
+                    cursor, self.projet_id, year, month
+                )
+                projet_info = (date_row[0], date_row[1])
+                total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
+                    cursor, self.projet_id, year, month, projet_info
+                )
                 
-                if cir_annuel > 0:
-                    # Répartir le CIR annuel sur les mois actifs de cette année
-                    mois_actifs_annee = []
-                    temp_date = max(current_date, datetime.datetime(year, 1, 1))
-                    fin_annee = min(fin_projet, datetime.datetime(year, 12, 31))
-                    
-                    while temp_date <= fin_annee:
-                        mois_actifs_annee.append(temp_date.month)
-                        if temp_date.month == 12:
-                            break
-                        temp_date = datetime.datetime(temp_date.year, temp_date.month + 1, 1)
-                    
-                    # Répartir équitablement le CIR sur les mois actifs
-                    if mois_actifs_annee:
-                        cir_mensuel = cir_annuel / len(mois_actifs_annee)
-                        
-                        # Calculer l'assiette correspondante pour l'affichage
-                        for mois in mois_actifs_annee:
-                            # Calculer les éléments pour ce mois pour l'affichage
-                            temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
-                                cursor, self.projet_id, year, mois, 'montant_charge'
-                            )
-                            amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
-                                cursor, self.projet_id, year, mois
-                            )
-                            projet_info = (date_row[0], date_row[1])
-                            total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
-                                cursor, self.projet_id, year, mois, projet_info
-                            )
-                            
-                            # Calculer l'assiette éligible pour ce mois
-                            assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
-                            
-                            if assiette_mensuelle > 0:
-                                montant_net_eligible_total += assiette_mensuelle
-                                cir_total += cir_mensuel
+                # Calculer l'assiette éligible pour ce mois
+                assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
                 
-                # Passer à l'année suivante
-                current_date = datetime.datetime(year + 1, 1, 1)
+                # Calculer le CIR pour ce mois en utilisant EXACTEMENT la même méthode que le compte de résultat
+                cir_mensuel = temp_compte_resultat.calculate_distributed_cir(cursor, year, month)
+                
+                if assiette_mensuelle > 0 and cir_mensuel > 0:
+                    montant_net_eligible_total += assiette_mensuelle
+                    cir_total += cir_mensuel
+                
+                # Passer au mois suivant
+                if current_date.month == 12:
+                    current_date = datetime.datetime(current_date.year + 1, 1, 1)
+                else:
+                    current_date = datetime.datetime(current_date.year, current_date.month + 1, 1)
 
             # Ajouter un titre pour le CIR
             self.budget_vbox.addWidget(QLabel("<b>CIR :</b>"))
