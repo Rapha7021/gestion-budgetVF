@@ -115,11 +115,29 @@ class ProjectDetailsDialog(QDialog):
         left_column.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
         left_column.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
         
-        # Champ détails avec retour à la ligne automatique
-        details_label = QLabel(f"<b>Détails :</b> {projet[2]}")
-        details_label.setWordWrap(True)
-        details_label.setMaximumWidth(350)
-        left_column.addWidget(details_label)
+        # Champ détails avec un QTextEdit en lecture seule pour une meilleure gestion du texte long
+        details_container = QVBoxLayout()
+        details_title = QLabel("<b>Détails :</b>")
+        details_container.addWidget(details_title)
+        
+        details_text = QTextEdit()
+        details_text.setPlainText(projet[2] if projet[2] else "Aucun détail")
+        details_text.setReadOnly(True)
+        details_text.setMaximumHeight(100)  # Hauteur fixe mais scrollable
+        details_text.setMaximumWidth(400)   # Largeur légèrement augmentée
+        details_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        details_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Style pour que ça ressemble plus à un affichage qu'à un champ d'édition
+        details_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f8f8;
+                border: 1px solid #ddd;
+                font-family: inherit;
+                font-size: inherit;
+            }
+        """)
+        details_container.addWidget(details_text)
+        left_column.addLayout(details_container)
         
         left_column.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
         left_column.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
@@ -258,6 +276,9 @@ class ProjectDetailsDialog(QDialog):
         # Ajout du bouton "Compte de résultat global"
         compte_resultat_btn = QPushButton("Compte de résultat global")
         btn_hbox.addWidget(compte_resultat_btn)
+        # Ajout du bouton "Imprimer la page"
+        print_page_btn = QPushButton("Imprimer la page")
+        btn_hbox.addWidget(print_page_btn)
         main_layout.addLayout(btn_hbox)
 
         self.projet_id = projet_id
@@ -277,6 +298,8 @@ class ProjectDetailsDialog(QDialog):
         manage_tasks_btn.clicked.connect(self.open_task_manager)
         # Connexion du bouton "Compte de résultat global"
         compte_resultat_btn.clicked.connect(self.open_compte_resultat)
+        # Connexion du bouton "Imprimer la page"
+        print_page_btn.clicked.connect(self.print_page)
 
         # Espace vide en dessous
         main_layout.addStretch()
@@ -1828,4 +1851,608 @@ class ProjectDetailsDialog(QDialog):
                 cout_total += jours * 500
         
         return cout_total
+
+    def print_page(self):
+        """Ouvre l'aperçu d'impression de la page des détails du projet"""
+        try:
+            from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
+            from PyQt6.QtGui import QTextDocument
+            from PyQt6.QtCore import QMarginsF
+            import datetime
+            
+            # Créer le document HTML
+            html_content = self.generate_print_html()
+            
+            # Créer l'objet printer avec configuration minimale
+            printer = QPrinter()
+            
+            # Configuration basique qui fonctionne partout
+            try:
+                printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            except:
+                pass
+            
+            # Créer la dialog d'aperçu d'impression
+            preview_dialog = QPrintPreviewDialog(printer, self)
+            preview_dialog.setWindowTitle("Aperçu d'impression - Détails du projet")
+            
+            # Connecter le signal pour générer le contenu
+            preview_dialog.paintRequested.connect(lambda: self.print_document(printer, html_content))
+            
+            # Redimensionner la fenêtre d'aperçu
+            screen = preview_dialog.screen().geometry()
+            preview_dialog.resize(int(screen.width() * 0.8), int(screen.height() * 0.8))
+            
+            # Afficher l'aperçu
+            preview_dialog.exec()
+            
+        except ImportError as e:
+            QMessageBox.critical(
+                self, 
+                "Erreur", 
+                f"Impossible de charger les modules d'impression :\n{str(e)}\n\n"
+                "Assurez-vous que PyQt6.QtPrintSupport est installé."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, 
+                "Erreur", 
+                f"Erreur lors de l'ouverture de l'aperçu d'impression :\n{str(e)}"
+            )
+
+    def print_document(self, printer, html_content):
+        """Imprime le document HTML sur l'imprimante/PDF"""
+        from PyQt6.QtGui import QTextDocument
+        
+        document = QTextDocument()
+        document.setHtml(html_content)
+        document.print(printer)
+
+    def generate_print_html(self):
+        """Génère le contenu HTML formaté pour l'impression"""
+        # Récupérer toutes les données du projet
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            
+            # Informations du projet
+            cursor.execute('''
+                SELECT p.code, p.nom, p.details, p.date_debut, p.date_fin, p.livrables, 
+                       c.nom || ' ' || c.prenom || ' - ' || c.direction AS chef_complet, 
+                       p.etat, p.cir, p.subvention, p.theme_principal
+                FROM projets p
+                LEFT JOIN chefs_projet c ON p.chef = c.id
+                WHERE p.id=?
+            ''', (self.projet_id,))
+            projet = cursor.fetchone()
+            
+            # Thèmes
+            cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
+            themes = [nom for (nom,) in cursor.fetchall()]
+            
+            # Équipe
+            cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (self.projet_id,))
+            equipe = cursor.fetchall()
+            
+            # Investissements
+            cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
+            investissements = cursor.fetchall()
+            
+            # Actualités
+            cursor.execute('SELECT message, date FROM actualites WHERE projet_id=? ORDER BY date DESC', (self.projet_id,))
+            actualites = cursor.fetchall()
+            
+            # Images
+            cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (self.projet_id,))
+            images = cursor.fetchall()
+            
+            # Calcul des coûts (réutiliser la logique existante)
+            cursor.execute('''
+                SELECT t.categorie, SUM(t.jours) AS total_jours
+                FROM temps_travail t
+                WHERE t.projet_id = ?
+                GROUP BY t.categorie
+            ''', (self.projet_id,))
+            categories_jours = cursor.fetchall()
+            
+            mapping_categories = {
+                "Stagiaire Projet": "STP",
+                "Assistante / opérateur": "AOP", 
+                "Technicien": "TEP",
+                "Junior": "IJP",
+                "Senior": "ISP",
+                "Expert": "EDP",
+                "Collaborateur moyen": "MOY"
+            }
+            
+            couts = {"charge": 0, "direct": 0, "complet": 0}
+            for categorie, total_jours in categories_jours:
+                code_categorie = mapping_categories.get(categorie, categorie)
+                cursor.execute('''
+                    SELECT montant_charge, cout_production, cout_complet
+                    FROM categorie_cout
+                    WHERE categorie = ?
+                ''', (code_categorie,))
+                res = cursor.fetchone()
+                
+                if res:
+                    montant_charge, cout_production, cout_complet = res
+                    couts["charge"] += float(total_jours * montant_charge) if montant_charge else 0
+                    couts["direct"] += float(total_jours * cout_production) if cout_production else 0
+                    couts["complet"] += float(total_jours * cout_complet) if cout_complet else 0
+
+            # Ajouter les dépenses externes et autres
+            cursor.execute('SELECT SUM(montant) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+            depenses_externes = cursor.fetchone()
+            if depenses_externes and depenses_externes[0]:
+                montant_depenses = float(depenses_externes[0])
+                couts["charge"] += montant_depenses
+                couts["direct"] += montant_depenses
+                couts["complet"] += montant_depenses
+
+            cursor.execute('SELECT SUM(montant) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+            autres_depenses = cursor.fetchone()
+            if autres_depenses and autres_depenses[0]:
+                montant_autres = float(autres_depenses[0])
+                couts["charge"] += montant_autres
+                couts["direct"] += montant_autres
+                couts["complet"] += montant_autres
+
+        # Génération du HTML
+        from datetime import datetime
+        from utils import format_montant
+        import html as html_module
+        
+        # Fonction pour échapper les caractères HTML
+        def escape_html(text):
+            return html_module.escape(str(text)) if text else ""
+        
+        date_impression = datetime.now().strftime("%d/%m/%Y à %H:%M")
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Détails du projet - {projet[1] if projet[1] else 'Sans nom'}</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    font-size: 12pt;
+                    line-height: 1.4;
+                    margin: 20px;
+                    padding: 0;
+                    max-width: 100%;
+                }}
+                .header {{
+                    text-align: center;
+                    border-bottom: 2px solid #333;
+                    padding-bottom: 10px;
+                    margin-bottom: 20px;
+                }}
+                .project-title {{
+                    font-size: 18pt;
+                    font-weight: bold;
+                    color: #333;
+                    margin-bottom: 5px;
+                }}
+                .project-code {{
+                    font-size: 14pt;
+                    color: #666;
+                    margin-bottom: 5px;
+                }}
+                .print-date {{
+                    font-size: 9pt;
+                    color: #888;
+                    font-style: italic;
+                }}
+                .section {{
+                    margin-bottom: 20px;
+                    break-inside: avoid;
+                }}
+                .section-title {{
+                    font-size: 14pt;
+                    font-weight: bold;
+                    color: #333;
+                    border-bottom: 1px solid #ccc;
+                    padding-bottom: 5px;
+                    margin-bottom: 10px;
+                }}
+                .info-grid {{
+                    display: table;
+                    width: 100%;
+                    margin-bottom: 15px;
+                }}
+                .info-grid > div {{
+                    display: table-cell;
+                    width: 50%;
+                    vertical-align: top;
+                    padding-right: 20px;
+                }}
+                .info-item {{
+                    margin-bottom: 8px;
+                }}
+                .info-label {{
+                    font-weight: bold;
+                    color: #333;
+                }}
+                .details-box {{
+                    background-color: #f9f9f9;
+                    border: 1px solid #ddd;
+                    padding: 10px;
+                    border-radius: 4px;
+                    margin-bottom: 10px;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-bottom: 15px;
+                }}
+                th, td {{
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                }}
+                th {{
+                    background-color: #f2f2f2;
+                    font-weight: bold;
+                }}
+                .budget-table {{
+                    width: 50%;
+                }}
+                .budget-table td:last-child {{
+                    text-align: right;
+                    font-family: 'Courier New', monospace;
+                }}
+                .actualites-table {{
+                    margin-top: 10px;
+                }}
+                .actualites-table td:first-child {{
+                    width: 120px;
+                    text-align: center;
+                    font-size: 9pt;
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    text-align: center;
+                    font-size: 9pt;
+                    color: #666;
+                    border-top: 1px solid #ccc;
+                    padding-top: 10px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="project-title">{escape_html(projet[1]) if projet[1] else 'Projet sans nom'}</div>
+                <div class="project-code">Code: {escape_html(projet[0]) if projet[0] else 'Non défini'}</div>
+                <div class="print-date">Imprimé le {date_impression}</div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Informations générales</div>
+                <div class="info-grid">
+                    <div>
+                        <div class="info-item">
+                            <span class="info-label">Date de début:</span> {escape_html(projet[3]) if projet[3] else 'Non définie'}
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Date de fin:</span> {escape_html(projet[4]) if projet[4] else 'Non définie'}
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">État:</span> {escape_html(projet[7]) if projet[7] else 'Non défini'}
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Chef de projet:</span> {escape_html(projet[6]) if projet[6] else 'Non défini'}
+                        </div>
+                    </div>
+                    <div>
+                        <div class="info-item">
+                            <span class="info-label">CIR:</span> {'Oui' if projet[8] else 'Non'}
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Subvention:</span> {'Oui' if projet[9] else 'Non'}
+                        </div>
+                        {f"<div class='info-item'><span class='info-label'>Thème principal:</span> {escape_html(projet[10])}</div>" if projet[10] else ""}
+                        {f"<div class='info-item'><span class='info-label'>Thèmes:</span> {escape_html(', '.join(themes))}</div>" if themes else ""}
+                    </div>
+                </div>
+                
+                {f'''<div class="details-box">
+                    <div class="info-label">Détails du projet:</div>
+                    <div>{escape_html(projet[2]) if projet[2] else "Aucun détail"}</div>
+                </div>''' if projet[2] else ''}
+                
+                {f'''<div class="details-box">
+                    <div class="info-label">Livrables:</div>
+                    <div>{escape_html(projet[5]) if projet[5] else "Aucun livrable défini"}</div>
+                </div>''' if projet[5] else ''}
+            </div>
+        """
+        
+        # Section Équipe
+        if equipe:
+            equipe_par_direction = {}
+            for direction, type_, nombre in equipe:
+                if nombre > 0:
+                    if direction not in equipe_par_direction:
+                        equipe_par_direction[direction] = []
+                    equipe_par_direction[direction].append(f"{type_}: {nombre}")
+            
+            if equipe_par_direction:
+                html += '''
+                <div class="section">
+                    <div class="section-title">Équipe</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Direction</th>
+                                <th>Composition</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                '''
+                for direction, membres in equipe_par_direction.items():
+                    html += f'''
+                            <tr>
+                                <td>{escape_html(direction)}</td>
+                                <td>{escape_html(", ".join(membres))}</td>
+                            </tr>
+                    '''
+                html += '''
+                        </tbody>
+                    </table>
+                </div>
+                '''
+
+        # Section Investissements
+        if investissements:
+            html += '''
+            <div class="section">
+                <div class="section-title">Investissements</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Montant</th>
+                            <th>Date d'achat</th>
+                            <th>Durée (années)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            '''
+            for montant, date_achat, duree in investissements:
+                html += f'''
+                        <tr>
+                            <td>{format_montant(montant)}</td>
+                            <td>{escape_html(date_achat)}</td>
+                            <td>{duree}</td>
+                        </tr>
+                '''
+            html += '''
+                    </tbody>
+                </table>
+            </div>
+            '''
+
+        # Section Budget
+        html += f'''
+        <div class="section">
+            <div class="section-title">Budget</div>
+            <table class="budget-table">
+                <thead>
+                    <tr>
+                        <th>Type de coût</th>
+                        <th>Montant</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Coût chargé</td>
+                        <td>{format_montant(couts["charge"])}</td>
+                    </tr>
+                    <tr>
+                        <td>Coût production</td>
+                        <td>{format_montant(couts["direct"])}</td>
+                    </tr>
+                    <tr>
+                        <td>Coût complet</td>
+                        <td>{format_montant(couts["complet"])}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        '''
+
+        # Section Subventions
+        if projet[9]:  # Si le projet a des subventions
+            cursor.execute('''
+                SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
+                       depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
+                       depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
+                       date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
+                FROM subventions 
+                WHERE projet_id = ?
+            ''', (self.projet_id,))
+            subventions_data = cursor.fetchall()
+            
+            if subventions_data:
+                html += '''
+                <div class="section">
+                    <div class="section-title">Subventions</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Type</th>
+                                <th>Période</th>
+                                <th>Taux</th>
+                                <th>Montant max</th>
+                                <th>Dépenses éligibles max</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                '''
+                
+                for subv in subventions_data:
+                    nom, mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, dep_autres, coef_autres, dep_amort, coef_amort, cd, taux, date_debut, date_fin, montant_max, depenses_max = subv
+                    
+                    type_subv = "Forfaitaire" if mode_simplifie else "Au réel"
+                    periode = f"{date_debut} - {date_fin}" if date_debut and date_fin else "Non définie"
+                    taux_display = f"{taux}%" if taux else "Non défini"
+                    montant_max_display = format_montant(montant_max) if montant_max else "Non défini"
+                    depenses_max_display = format_montant(depenses_max) if depenses_max else "Non défini"
+                    
+                    html += f'''
+                            <tr>
+                                <td>{escape_html(nom)}</td>
+                                <td>{type_subv}</td>
+                                <td>{periode}</td>
+                                <td>{taux_display}</td>
+                                <td>{montant_max_display}</td>
+                                <td>{depenses_max_display}</td>
+                            </tr>
+                    '''
+                
+                html += '''
+                        </tbody>
+                    </table>
+                </div>
+                '''
+
+        # Section CIR
+        if projet[8]:  # Si le projet a le CIR activé
+            # Récupérer les coefficients CIR
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+            date_row = cursor.fetchone()
+            
+            if date_row and date_row[0] and date_row[1]:
+                try:
+                    import datetime
+                    debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
+                    fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
+                    
+                    # Récupérer les coefficients CIR pour la première année
+                    cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (debut_projet.year,))
+                    cir_coeffs = cursor.fetchone()
+                    
+                    if cir_coeffs and cir_coeffs[2]:  # k3 existe
+                        k3 = cir_coeffs[2]
+                        taux_cir = k3 * 100
+                        
+                        html += f'''
+                        <div class="section">
+                            <div class="section-title">Crédit d'Impôt Recherche (CIR)</div>
+                            <table class="budget-table">
+                                <thead>
+                                    <tr>
+                                        <th>Information</th>
+                                        <th>Valeur</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Statut</td>
+                                        <td>Activé</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Taux applicable</td>
+                                        <td>{taux_cir:.1f}%</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Période d'application</td>
+                                        <td>{date_row[0]} - {date_row[1]}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        '''
+                except:
+                    html += '''
+                    <div class="section">
+                        <div class="section-title">Crédit d'Impôt Recherche (CIR)</div>
+                        <p>CIR activé - Informations détaillées non disponibles</p>
+                    </div>
+                    '''
+
+        # Section Images
+        if images:
+            html += '''
+            <div class="section">
+                <div class="section-title">Images du projet</div>
+                <div style="text-align: center;">
+            '''
+            
+            for nom, data in images:
+                try:
+                    # Convertir les données binaires en base64 pour l'inclusion dans le HTML
+                    import base64
+                    image_base64 = base64.b64encode(data).decode('utf-8')
+                    
+                    # Détecter le type d'image (simple détection basée sur les premiers bytes)
+                    if data.startswith(b'\xFF\xD8\xFF'):
+                        mime_type = 'image/jpeg'
+                    elif data.startswith(b'\x89PNG'):
+                        mime_type = 'image/png'
+                    elif data.startswith(b'GIF'):
+                        mime_type = 'image/gif'
+                    else:
+                        mime_type = 'image/jpeg'  # Par défaut
+                    
+                    html += f'''
+                        <div style="margin: 10px; display: inline-block;">
+                            <p style="font-weight: bold; margin-bottom: 5px;">{escape_html(nom)}</p>
+                            <img src="data:{mime_type};base64,{image_base64}" 
+                                 style="max-width: 300px; max-height: 200px; border: 1px solid #ddd; border-radius: 4px;" 
+                                 alt="{escape_html(nom)}" />
+                        </div>
+                    '''
+                except Exception as e:
+                    # En cas d'erreur, afficher juste le nom de l'image
+                    html += f'''
+                        <div style="margin: 10px; display: inline-block;">
+                            <p style="font-weight: bold;">{escape_html(nom)}</p>
+                            <p style="color: #666; font-style: italic;">Image non disponible</p>
+                        </div>
+                    '''
+            
+            html += '''
+                </div>
+            </div>
+            '''
+
+        # Section Actualités
+        if actualites:
+            html += '''
+            <div class="section">
+                <div class="section-title">Actualités du projet</div>
+                <table class="actualites-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            '''
+            for message, date in actualites:
+                html += f'''
+                        <tr>
+                            <td>{escape_html(date)}</td>
+                            <td>{escape_html(message)}</td>
+                        </tr>
+                '''
+            html += '''
+                    </tbody>
+                </table>
+            </div>
+            '''
+
+        html += '''
+            <div class="footer">
+                Document généré automatiquement par le système de gestion de budget
+            </div>
+        </body>
+        </html>
+        '''
+        
+        return html
 
