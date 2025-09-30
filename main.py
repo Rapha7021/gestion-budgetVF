@@ -369,6 +369,8 @@ class MainWindow(QWidget):
         self.project_table.setHorizontalHeaderLabels(['Code projet', 'Nom projet', 'Chef de projet', 'Etat'])
         self.project_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.project_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # Activer le tri par colonnes
+        self.project_table.setSortingEnabled(True)
         main_area.addWidget(self.project_table)
         
         # Zone droite avec le bouton "Imprimer le budget" centré verticalement
