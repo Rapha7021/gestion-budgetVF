@@ -322,7 +322,8 @@ class SubventionDialog(QDialog):
         self.update_assiette()
 
     def get_project_data(self):
-        """Récupère les données du projet pour calculer le montant de la subvention sur la période de subvention"""
+        """Récupère les données du projet pour calculer le montant de la subvention sur la période de subvention
+        AVEC REDISTRIBUTION AUTOMATIQUE comme dans le compte de résultat"""
         if not self.projet_id:
             return {
                 'temps_travail_total': 0,
@@ -334,25 +335,27 @@ class SubventionDialog(QDialog):
         conn = sqlite3.connect('gestion_budget.db')
         cursor = conn.cursor()
         
-        # Récupérer les dates de subvention si définies
-        date_debut_subv = self.date_debut_subv.date().toString('MM/yyyy') if hasattr(self, 'date_debut_subv') else None
-        date_fin_subv = self.date_fin_subv.date().toString('MM/yyyy') if hasattr(self, 'date_fin_subv') else None
+        # Récupérer les dates du projet ET de subvention
+        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+        date_row = cursor.fetchone()
+        if not date_row or not date_row[0] or not date_row[1]:
+            conn.close()
+            return {
+                'temps_travail_total': 0,
+                'depenses_externes': 0,
+                'autres_achats': 0,
+                'amortissements': 0
+            }
         
-        if not date_debut_subv or not date_fin_subv:
-            # Si pas de dates de subvention, utiliser les dates du projet
-            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
-            date_row = cursor.fetchone()
-            if not date_row or not date_row[0] or not date_row[1]:
-                conn.close()
-                return {
-                    'temps_travail_total': 0,
-                    'depenses_externes': 0,
-                    'autres_achats': 0,
-                    'amortissements': 0
-                }
-            date_debut_subv, date_fin_subv = date_row[0], date_row[1]
+        date_debut_projet, date_fin_projet = date_row[0], date_row[1]
+        
+        # Récupérer les dates de subvention si définies
+        date_debut_subv = self.date_debut_subv.date().toString('MM/yyyy') if hasattr(self, 'date_debut_subv') else date_debut_projet
+        date_fin_subv = self.date_fin_subv.date().toString('MM/yyyy') if hasattr(self, 'date_fin_subv') else date_fin_projet
         
         try:
+            debut_projet = datetime.datetime.strptime(date_debut_projet, '%m/%Y')
+            fin_projet = datetime.datetime.strptime(date_fin_projet, '%m/%Y')
             debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
             fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
         except ValueError:
@@ -364,45 +367,45 @@ class SubventionDialog(QDialog):
                 'amortissements': 0
             }
         
-        # Récupérer les vraies données détaillées du projet pour la période de subvention UNIQUEMENT
+        # Calculer la durée totale du projet et de la subvention en mois
+        duree_projet_mois = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
+        duree_subv_mois = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
+        
+        # REDISTRIBUTION AUTOMATIQUE - Même logique que le compte de résultat
         temps_travail_total = 0
         depenses_externes = 0
         autres_achats = 0
         amortissements = 0
         
-        # Fonction helper pour vérifier si un mois/année est dans la période de subvention
-        def is_in_subvention_period(annee, mois):
-            try:
-                # Convertir le mois français en numéro
-                mois_mapping = {
-                    'Janvier': 1, 'Février': 2, 'Mars': 3, 'Avril': 4, 'Mai': 5, 'Juin': 6,
-                    'Juillet': 7, 'Août': 8, 'Septembre': 9, 'Octobre': 10, 'Novembre': 11, 'Décembre': 12
-                }
-                if mois not in mois_mapping:
-                    return False
-                    
-                mois_num = mois_mapping[mois]
-                date_entry = datetime.datetime(int(annee), mois_num, 1)
-                
-                # Vérifier si cette date est dans la période de subvention
-                return debut_subv <= date_entry <= fin_subv
-            except:
-                return False
-        
-        # Temps de travail avec valorisation pour la période de subvention
+        # 1. TEMPS DE TRAVAIL - Redistribution automatique
         cursor.execute("""
-            SELECT tt.annee, tt.mois, tt.jours, cc.montant_charge
+            SELECT tt.annee, tt.mois, tt.jours, tt.categorie
             FROM temps_travail tt
-            JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
             WHERE tt.projet_id = ?
         """, (self.projet_id,))
         temps_results = cursor.fetchall()
         
-        for annee, mois, jours, montant_charge in temps_results:
-            if is_in_subvention_period(annee, mois):
-                temps_travail_total += jours * montant_charge
+        # Calculer le total des jours et redistribuer
+        total_jours_par_categorie = {}
+        for annee, mois, jours, categorie in temps_results:
+            if categorie not in total_jours_par_categorie:
+                total_jours_par_categorie[categorie] = {'total_jours': 0, 'annee_ref': annee}
+            total_jours_par_categorie[categorie]['total_jours'] += jours
         
-        # Dépenses externes pour la période de subvention
+        # Redistribuer proportionnellement sur la période de subvention
+        if duree_projet_mois > 0:
+            for categorie, data in total_jours_par_categorie.items():
+                jours_par_mois = data['total_jours'] / duree_projet_mois
+                jours_periode_subv = jours_par_mois * duree_subv_mois
+                
+                # Valoriser avec le coût de la première année du projet
+                cursor.execute('SELECT montant_charge FROM categorie_cout WHERE libelle = ? AND annee = ?', 
+                             (categorie, debut_projet.year))
+                cout_row = cursor.fetchone()
+                if cout_row:
+                    temps_travail_total += jours_periode_subv * cout_row[0]
+        
+        # 2. DÉPENSES EXTERNES - Redistribution automatique
         cursor.execute("""
             SELECT annee, mois, montant
             FROM depenses 
@@ -410,11 +413,12 @@ class SubventionDialog(QDialog):
         """, (self.projet_id,))
         depenses_results = cursor.fetchall()
         
-        for annee, mois, montant in depenses_results:
-            if is_in_subvention_period(annee, mois):
-                depenses_externes += montant
+        total_depenses_externes = sum(montant for _, _, montant in depenses_results)
+        if duree_projet_mois > 0:
+            depenses_par_mois = total_depenses_externes / duree_projet_mois
+            depenses_externes = depenses_par_mois * duree_subv_mois
         
-        # Autres achats (autres dépenses) pour la période de subvention
+        # 3. AUTRES ACHATS - Redistribution automatique
         cursor.execute("""
             SELECT annee, mois, montant
             FROM autres_depenses 
@@ -422,12 +426,12 @@ class SubventionDialog(QDialog):
         """, (self.projet_id,))
         autres_results = cursor.fetchall()
         
-        for annee, mois, montant in autres_results:
-            if is_in_subvention_period(annee, mois):
-                autres_achats += montant
+        total_autres_achats = sum(montant for _, _, montant in autres_results)
+        if duree_projet_mois > 0:
+            autres_par_mois = total_autres_achats / duree_projet_mois
+            autres_achats = autres_par_mois * duree_subv_mois
         
-        # Amortissements (investissements) pour la période de subvention
-        # Note: Les investissements n'ont pas de répartition mensuelle, on les répartit sur toute la durée du projet
+        # 4. AMORTISSEMENTS - Calcul proportionnel
         cursor.execute("""
             SELECT montant, date_achat, duree
             FROM investissements 
@@ -435,20 +439,15 @@ class SubventionDialog(QDialog):
         """, (self.projet_id,))
         invest_results = cursor.fetchall()
         
-        # Pour les investissements, on calcule une répartition mensuelle sur la durée du projet
-        # et on ne prend que la part qui correspond à la période de subvention
-        if invest_results:
-            # Calculer la durée totale du projet en mois
-            try:
-                duree_projet_mois = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
-                if duree_projet_mois > 0:
-                    for montant, date_achat, duree in invest_results:
-                        if montant:
-                            # Répartir l'investissement sur la période de subvention
-                            # (simplification : on considère que l'amortissement se fait sur la période de subvention)
-                            amortissements += float(montant)
-            except:
-                pass
+        for montant_invest, date_achat, duree in invest_results:
+            if montant_invest and duree:
+                try:
+                    # Calcul de l'amortissement mensuel
+                    amortissement_mensuel = float(montant_invest) / (int(duree) * 12)
+                    # Appliquer sur la période de subvention
+                    amortissements += amortissement_mensuel * duree_subv_mois
+                except:
+                    pass
         
         data = {
             'temps_travail_total': temps_travail_total,
