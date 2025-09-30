@@ -542,7 +542,7 @@ class ProjectDetailsDialog(QDialog):
 
     def get_project_data_for_subventions(self, date_debut_subv=None, date_fin_subv=None):
         """Récupère les données du projet pour calculer les subventions AVEC REDISTRIBUTION AUTOMATIQUE
-        Si les dates de subvention sont fournies, calcule uniquement sur cette période"""
+        Si les dates de subvention sont fournies, calcule sur cette période, sinon sur tout le projet"""
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -553,29 +553,34 @@ class ProjectDetailsDialog(QDialog):
             'amortissements': 0
         }
         
-        # 1. Récupérer dates de début et fin du projet
-        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
-        date_row = cursor.fetchone()
-        if not date_row or not date_row[0] or not date_row[1]:
-            conn.close()
-            return data
-        
         import datetime
         
-        # Si pas de dates de subvention fournies, utiliser les dates du projet
-        if not date_debut_subv or not date_fin_subv:
-            date_debut_subv, date_fin_subv = date_row[0], date_row[1]
+        # Déterminer les dates de calcul
+        if date_debut_subv and date_fin_subv:
+            # Utiliser les dates de subvention fournies
+            try:
+                debut_calcul = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
+                fin_calcul = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
+            except ValueError:
+                conn.close()
+                return data
+        else:
+            # Utiliser les dates du projet
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
+            date_row = cursor.fetchone()
+            if not date_row or not date_row[0] or not date_row[1]:
+                conn.close()
+                return data
+            
+            try:
+                debut_calcul = datetime.datetime.strptime(date_row[0], '%m/%Y')
+                fin_calcul = datetime.datetime.strptime(date_row[1], '%m/%Y')
+            except ValueError:
+                conn.close()
+                return data
         
-        # Convertir les dates MM/yyyy en objets datetime
-        try:
-            debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
-            fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
-        except ValueError:
-            conn.close()
-            return data
-        
-        # UTILISER LA MÊME LOGIQUE QUE SUBVENTION_DIALOG.PY
-        # Créer une classe helper pour accéder aux méthodes de redistribution
+        # UTILISER LA MÊME LOGIQUE QUE SubventionDialog - Redistribution sur la période spécifiée
+        # Créer une classe helper pour accéder aux méthodes de redistribution (copie de SubventionDialog)
         class RedistributionHelper:
             def __init__(self):
                 pass
@@ -585,105 +590,140 @@ class ProjectDetailsDialog(QDialog):
                 # Récupérer les dates du projet
                 cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
                 projet_info = cursor.fetchone()
-                
                 if not projet_info or not projet_info[0] or not projet_info[1]:
                     return 0
+                    
+                debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
                 
-                try:
-                    debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
-                    fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
-                except ValueError:
+                # Vérifier si l'année est dans la période du projet
+                if year < debut_projet.year or year > fin_projet.year:
                     return 0
                 
-                # Calculer la durée totale du projet en mois
-                total_mois_projet = (fin_projet.year - debut_projet.year) * 12 + fin_projet.month - debut_projet.month + 1
+                month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                              "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
                 
-                # Vérifier si le mois demandé est dans la période du projet
-                try:
-                    mois_demande = datetime.datetime(year, month, 1)
-                    if mois_demande < debut_projet or mois_demande > fin_projet:
-                        return 0
-                except ValueError:
-                    return 0
-                
-                # Récupérer tout le temps de travail du projet pour cette année
+                # Vérifier si tous les couples (membre_id, categorie) n'ont qu'une seule entrée dans l'année
                 cursor.execute("""
-                    SELECT tt.categorie, SUM(tt.jours) as total_jours
-                    FROM temps_travail tt
-                    WHERE tt.projet_id = ? AND tt.annee = ?
-                    GROUP BY tt.categorie
+                    SELECT membre_id, categorie, COUNT(*) as nb_entries
+                    FROM temps_travail 
+                    WHERE projet_id = ? AND annee = ?
+                    GROUP BY membre_id, categorie
                 """, (project_id, year))
                 
-                temps_travail_rows = cursor.fetchall()
-                cout_total = 0
+                couples_entries = cursor.fetchall()
+                if not couples_entries:
+                    return 0
                 
-                mapping_categories = {
-                    "Stagiaire Projet": "STP",
-                    "Assistante / opérateur": "AOP", 
-                    "Technicien": "TEP",
-                    "Junior": "IJP",
-                    "Senior": "ISP",
-                    "Expert": "EDP",
-                    "Collaborateur moyen": "MOY"
-                }
+                # Vérifier si TOUS les couples n'ont qu'une seule entrée
+                all_single_entry = all(nb_entries == 1 for _, _, nb_entries in couples_entries)
                 
-                for categorie, total_jours in temps_travail_rows:
-                    categorie_code = mapping_categories.get(categorie, "")
-                    if categorie_code:
-                        cursor.execute("""
-                            SELECT montant_charge 
-                            FROM categorie_cout 
-                            WHERE categorie = ? AND annee = ?
-                        """, (categorie_code, year))
+                if not all_single_entry:
+                    # PAS DE REDISTRIBUTION - utiliser les données réelles
+                    mois_nom = month_names[month - 1]
+                    cursor.execute("""
+                        SELECT SUM(tt.jours * cc.montant_charge)
+                        FROM temps_travail tt
+                        JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
+                        WHERE tt.projet_id = ? AND tt.annee = ? AND tt.mois = ?
+                    """, (project_id, year, mois_nom))
+                    
+                    result = cursor.fetchone()
+                    return float(result[0]) if result and result[0] else 0
+                
+                else:
+                    # REDISTRIBUTION - calculer le montant redistributé pour ce mois
+                    total_mois_projet = (fin_projet.year - debut_projet.year) * 12 + (fin_projet.month - debut_projet.month) + 1
+                    
+                    # Récupérer le coût total de l'année et le redistribuer
+                    cursor.execute("""
+                        SELECT SUM(tt.jours * cc.montant_charge)
+                        FROM temps_travail tt
+                        JOIN categorie_cout cc ON cc.libelle = tt.categorie AND cc.annee = tt.annee
+                        WHERE tt.projet_id = ? AND tt.annee = ?
+                    """, (project_id, year))
+                    
+                    result = cursor.fetchone()
+                    total_annee = float(result[0]) if result and result[0] else 0
+                    
+                    # Redistribuer sur tous les mois du projet dans cette année
+                    if total_annee > 0:
+                        debut_annee_projet = max(debut_projet, datetime.datetime(year, 1, 1))
+                        fin_annee_projet = min(fin_projet, datetime.datetime(year, 12, 31))
                         
-                        cout_row = cursor.fetchone()
-                        if cout_row and cout_row[0]:
-                            cout_journalier = float(cout_row[0])
-                        else:
-                            cout_journalier = 500  # Valeur par défaut
+                        mois_dans_annee = (fin_annee_projet.year - debut_annee_projet.year) * 12 + (fin_annee_projet.month - debut_annee_projet.month) + 1
                         
-                        # Redistribuer le coût total sur tous les mois du projet
-                        cout_total += (total_jours * cout_journalier) / total_mois_projet
-                
-                return cout_total
+                        # Vérifier si le mois demandé est dans la période du projet
+                        mois_demande = datetime.datetime(year, month, 1)
+                        if debut_annee_projet <= mois_demande <= fin_annee_projet:
+                            return total_annee / mois_dans_annee
+                    
+                    return 0
             
             def calculate_redistributed_expenses(self, cursor, project_id, year, month, table_name):
-                """Calcule les dépenses redistribuées pour une période"""
-                # Récupérer les dates du projet pour la redistribution
-                cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (project_id,))
-                date_row = cursor.fetchone()
+                """Calcule les dépenses redistributées pour une période"""
+                # Récupérer les dates du projet
+                cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
+                projet_info = cursor.fetchone()
+                if not projet_info or not projet_info[0] or not projet_info[1]:
+                    return 0
+                    
+                debut_projet = datetime.datetime.strptime(projet_info[0], '%m/%Y')
+                fin_projet = datetime.datetime.strptime(projet_info[1], '%m/%Y')
                 
-                if not date_row or not date_row[0] or not date_row[1]:
+                # Vérifier si l'année est dans la période du projet
+                if year < debut_projet.year or year > fin_projet.year:
                     return 0
                 
-                try:
-                    debut_projet = datetime.datetime.strptime(date_row[0], '%m/%Y')
-                    fin_projet = datetime.datetime.strptime(date_row[1], '%m/%Y')
-                except ValueError:
-                    return 0
+                month_names = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                              "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
                 
-                # Calculer le nombre total de mois du projet
-                total_mois = (fin_projet.year - debut_projet.year) * 12 + fin_projet.month - debut_projet.month + 1
-                
-                # Vérifier si le mois demandé est dans la période du projet
-                try:
-                    mois_demande = datetime.datetime(year, month, 1)
-                    if mois_demande < debut_projet or mois_demande > fin_projet:
-                        return 0
-                except ValueError:
-                    return 0
-                
-                # Récupérer toutes les dépenses de cette année pour ce projet
+                # Vérifier s'il y a plusieurs entrées dans l'année (nécessite redistribution)
                 cursor.execute(f"""
-                    SELECT SUM(montant)
+                    SELECT COUNT(DISTINCT mois) 
                     FROM {table_name}
                     WHERE projet_id = ? AND annee = ?
                 """, (project_id, year))
                 
-                total_annee = cursor.fetchone()[0] or 0
+                nb_mois_entries = cursor.fetchone()[0] or 0
                 
-                # Redistribuer uniformément sur tous les mois du projet
-                return float(total_annee) / total_mois
+                if nb_mois_entries <= 1:
+                    # PAS DE REDISTRIBUTION - utiliser les données réelles
+                    mois_nom = month_names[month - 1]
+                    cursor.execute(f"""
+                        SELECT SUM(montant)
+                        FROM {table_name}
+                        WHERE projet_id = ? AND annee = ? AND mois = ?
+                    """, (project_id, year, mois_nom))
+                    
+                    result = cursor.fetchone()
+                    return float(result[0]) if result and result[0] else 0
+                
+                else:
+                    # REDISTRIBUTION - calculer le montant redistributé pour ce mois
+                    # Récupérer le total de l'année
+                    cursor.execute(f"""
+                        SELECT SUM(montant)
+                        FROM {table_name}
+                        WHERE projet_id = ? AND annee = ?
+                    """, (project_id, year))
+                    
+                    result = cursor.fetchone()
+                    total_annee = float(result[0]) if result and result[0] else 0
+                    
+                    if total_annee > 0:
+                        # Calculer les mois du projet dans cette année
+                        debut_annee_projet = max(debut_projet, datetime.datetime(year, 1, 1))
+                        fin_annee_projet = min(fin_projet, datetime.datetime(year, 12, 31))
+                        
+                        mois_dans_annee = (fin_annee_projet.year - debut_annee_projet.year) * 12 + (fin_annee_projet.month - debut_annee_projet.month) + 1
+                        
+                        # Vérifier si le mois demandé est dans la période du projet
+                        mois_demande = datetime.datetime(year, month, 1)
+                        if debut_annee_projet <= mois_demande <= fin_annee_projet:
+                            return total_annee / mois_dans_annee
+                    
+                    return 0
             
             def calculate_amortissement_for_period(self, cursor, project_id, year, month):
                 """Calcule les amortissements pour une période"""
@@ -697,23 +737,33 @@ class ProjectDetailsDialog(QDialog):
                 
                 for montant, date_achat, duree in cursor.fetchall():
                     try:
-                        # Convertir la date d'achat en datetime
-                        debut_amort = datetime.datetime.strptime(date_achat, '%m/%Y')
+                        # Parser la date d'achat
+                        date_parts = date_achat.split('/')
+                        if len(date_parts) == 2:  # Format MM/yyyy
+                            mois_achat = int(date_parts[0])
+                            annee_achat = int(date_parts[1])
+                        elif len(date_parts) == 3:  # Format dd/MM/yyyy
+                            annee_achat = int(date_parts[2])
+                            mois_achat = int(date_parts[1])
+                        else:
+                            continue
+                            
+                        debut_amort = datetime.datetime(annee_achat, mois_achat, 1)
                         
-                        # Calculer la fin de l'amortissement
-                        fin_amort = datetime.datetime(
-                            debut_amort.year + int(duree), 
-                            debut_amort.month, 
-                            debut_amort.day
-                        )
+                        # Calculer la fin d'amortissement
+                        fin_month = mois_achat + int(duree) - 1
+                        fin_year = annee_achat + (fin_month - 1) // 12
+                        fin_month = ((fin_month - 1) % 12) + 1
+                        fin_amort = datetime.datetime(fin_year, fin_month, 1)
                         
                         # Vérifier si le mois demandé est dans la période d'amortissement
                         mois_demande = datetime.datetime(year, month, 1)
                         if debut_amort <= mois_demande <= fin_amort:
                             # Calculer la dotation mensuelle
-                            dotation_mensuelle = float(montant) / (int(duree) * 12)
-                            amortissements_total += dotation_mensuelle
-                    except Exception:
+                            amortissement_mensuel = float(montant) / int(duree)
+                            amortissements_total += amortissement_mensuel
+                            
+                    except (ValueError, TypeError):
                         continue
                 
                 return amortissements_total
@@ -726,9 +776,9 @@ class ProjectDetailsDialog(QDialog):
         autres_achats = 0
         amortissements = 0
         
-        # Parcourir tous les mois de la période de subvention
-        current_date = debut_subv.replace(day=1)
-        while current_date <= fin_subv:
+        # Parcourir tous les mois de la période de calcul
+        current_date = debut_calcul.replace(day=1)
+        while current_date <= fin_calcul:
             year = current_date.year
             month = current_date.month
             
@@ -759,13 +809,10 @@ class ProjectDetailsDialog(QDialog):
             else:
                 current_date = current_date.replace(month=current_date.month + 1)
         
-        data = {
-            'temps_travail_total': temps_travail_total,
-            'depenses_externes': depenses_externes,
-            'autres_achats': autres_achats,
-            'amortissements': amortissements
-        }
-
+        data['temps_travail_total'] = temps_travail_total
+        data['depenses_externes'] = depenses_externes
+        data['autres_achats'] = autres_achats
+        data['amortissements'] = amortissements
         
         conn.close()
         return data
@@ -863,52 +910,58 @@ class ProjectDetailsDialog(QDialog):
                     }
                     subventions_data.append(subvention_data)
             
-            # Calculer le CIR mois par mois
+            # UTILISER EXACTEMENT LA MÊME LOGIQUE QUE LE COMPTE DE RÉSULTAT
+            # Importer la classe CompteResultatDisplay pour utiliser ses méthodes
+            from compte_resultat_display import CompteResultatDisplay
+            temp_compte_resultat = CompteResultatDisplay(self, {'project_ids': [self.projet_id], 'years': list(range(debut_projet.year, fin_projet.year + 1))})
+            
+            # Calculer le CIR pour chaque année du projet
             current_date = debut_projet
             while current_date <= fin_projet:
                 year = current_date.year
-                month = current_date.month
                 
-                # Calculer l'assiette éligible CIR pour ce mois (temps de travail + amortissements)
-                # IMPORTANT: Pour le CIR, on utilise les données RÉELLES du mois, pas la redistribution
+                # Calculer le CIR pour cette année en utilisant EXACTEMENT la même méthode que le compte de résultat
+                cir_annuel = temp_compte_resultat.calculate_distributed_cir(cursor, year)
                 
-                # 1. Temps de travail RÉEL pour ce mois spécifique
-                temps_travail_cout_mois = self.calculate_temps_travail_real_for_month(
-                    cursor, self.projet_id, year, month
-                )
+                if cir_annuel > 0:
+                    # Répartir le CIR annuel sur les mois actifs de cette année
+                    mois_actifs_annee = []
+                    temp_date = max(current_date, datetime.datetime(year, 1, 1))
+                    fin_annee = min(fin_projet, datetime.datetime(year, 12, 31))
+                    
+                    while temp_date <= fin_annee:
+                        mois_actifs_annee.append(temp_date.month)
+                        if temp_date.month == 12:
+                            break
+                        temp_date = datetime.datetime(temp_date.year, temp_date.month + 1, 1)
+                    
+                    # Répartir équitablement le CIR sur les mois actifs
+                    if mois_actifs_annee:
+                        cir_mensuel = cir_annuel / len(mois_actifs_annee)
+                        
+                        # Calculer l'assiette correspondante pour l'affichage
+                        for mois in mois_actifs_annee:
+                            # Calculer les éléments pour ce mois pour l'affichage
+                            temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
+                                cursor, self.projet_id, year, mois, 'montant_charge'
+                            )
+                            amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
+                                cursor, self.projet_id, year, mois
+                            )
+                            projet_info = (date_row[0], date_row[1])
+                            total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
+                                cursor, self.projet_id, year, mois, projet_info
+                            )
+                            
+                            # Calculer l'assiette éligible pour ce mois
+                            assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
+                            
+                            if assiette_mensuelle > 0:
+                                montant_net_eligible_total += assiette_mensuelle
+                                cir_total += cir_mensuel
                 
-                # 2. Amortissements pour ce mois
-                amortissements_mois = self.calculate_amortissements_for_period(
-                    cursor, self.projet_id, year, month
-                )
-                
-                # Appliquer les coefficients CIR
-                temps_travail_eligible_mois = temps_travail_cout_mois * k1
-                amortissements_eligible_mois = amortissements_mois * k2
-                assiette_cir_eligible = temps_travail_eligible_mois + amortissements_eligible_mois
-                
-                # Calculer le total des subventions pour ce mois
-                total_subventions_mois = 0
-                for subvention_data in subventions_data:
-                    subv_mois = SubventionDialog.calculate_distributed_subvention(
-                        self.projet_id, subvention_data, year, month
-                    )
-                    total_subventions_mois += subv_mois
-                
-                # Calculer le montant net éligible pour ce mois
-                montant_net_eligible_mois = assiette_cir_eligible - total_subventions_mois
-                
-                # Calculer le CIR pour ce mois (seulement si positif)
-                if montant_net_eligible_mois > 0:
-                    cir_mois = montant_net_eligible_mois * k3
-                    cir_total += cir_mois
-                    montant_net_eligible_total += montant_net_eligible_mois
-                
-                # Passer au mois suivant
-                if current_date.month == 12:
-                    current_date = datetime.datetime(current_date.year + 1, 1, 1)
-                else:
-                    current_date = datetime.datetime(current_date.year, current_date.month + 1, 1)
+                # Passer à l'année suivante
+                current_date = datetime.datetime(year + 1, 1, 1)
 
             # Ajouter un titre pour le CIR
             self.budget_vbox.addWidget(QLabel("<b>CIR :</b>"))
@@ -1476,8 +1529,7 @@ class ProjectDetailsDialog(QDialog):
         """Calcule les dépenses éligibles pour une période donnée avec redistribution SIMPLIFIÉE"""
         # Utiliser la même logique que SubventionDialog : récupérer les données totales et redistribuer
         
-        # Pour simplifier, on va utiliser directement get_project_data_for_subventions 
-        # et redistribuer sur la période de subvention
+        # Récupérer les dates de subvention et utiliser get_project_data_for_subventions avec ces dates
         date_debut_subv = subvention_data.get('date_debut_subvention')
         date_fin_subv = subvention_data.get('date_fin_subvention')
         data = self.get_project_data_for_subventions(date_debut_subv, date_fin_subv)
@@ -1524,9 +1576,35 @@ class ProjectDetailsDialog(QDialog):
         if depenses_dotation_amortissements:
             assiette_totale += data['amortissements'] * coef_dotation_amortissements
         
-        # Si on demande pour une année complète (month = None), retourner l'assiette totale
+        # Si on demande pour une année complète (month = None), calculer la part de cette année
         if month is None:
-            return assiette_totale
+            # Vérifier si l'année demandée est dans la période de subvention
+            if not date_debut_subv or not date_fin_subv:
+                return assiette_totale  # Si pas de dates spécifiques, retourner l'assiette totale
+                
+            try:
+                debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
+                fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
+                
+                # Calculer les bornes de l'année demandée dans la période de subvention
+                debut_annee_subv = max(debut_subv, datetime.datetime(year, 1, 1))
+                fin_annee_subv = min(fin_subv, datetime.datetime(year, 12, 31))
+                
+                # Si l'année n'intersecte pas avec la période de subvention
+                if debut_annee_subv > fin_annee_subv:
+                    return 0
+                
+                # Calculer le nombre de mois de l'année dans la période de subvention
+                mois_annee_dans_subv = (fin_annee_subv.year - debut_annee_subv.year) * 12 + (fin_annee_subv.month - debut_annee_subv.month) + 1
+                
+                # Calculer le nombre total de mois de la période de subvention
+                total_mois_subv = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
+                
+                # Retourner la part proportionnelle de l'assiette pour cette année
+                return assiette_totale * (mois_annee_dans_subv / total_mois_subv)
+                
+            except ValueError:
+                return assiette_totale  # En cas d'erreur, retourner l'assiette totale
         
         # Si on demande pour un mois spécifique, vérifier s'il est dans la période de subvention
         try:
