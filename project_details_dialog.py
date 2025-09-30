@@ -1033,53 +1033,6 @@ class ProjectDetailsDialog(QDialog):
             cir_table.setColumnWidth(1, 150)  # Coût éligible courant
             cir_table.setColumnWidth(2, 120)  # CIR attendue
 
-            # Ajouter un titre pour le CIR
-            self.budget_vbox.addWidget(QLabel("<b>CIR :</b>"))
-
-            # Créer le tableau du CIR
-            cir_table = QTableWidget()
-            cir_table.setRowCount(1)  # Une seule ligne pour le CIR
-            cir_table.setColumnCount(3)
-            
-            # Définir les en-têtes
-            headers = ["Taux", "Coût éligible courant", "CIR attendue"]
-            cir_table.setHorizontalHeaderLabels(headers)
-            
-            # Ajuster la taille du tableau
-            cir_table.setMaximumHeight(80)  # Hauteur fixe pour une seule ligne
-            cir_table.setMinimumHeight(80)
-            cir_table.setMaximumWidth(350)  # Largeur fixe pour l'alignement
-            
-            # Configurer l'apparence du tableau
-            cir_table.setAlternatingRowColors(True)
-            cir_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-            cir_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-            
-            # Style similaire au tableau des subventions
-            cir_table.setStyleSheet("""
-                QHeaderView::section {
-                    font-size: 10px;
-                    font-weight: bold;
-                    padding: 2px;
-                    background-color: #f0f0f0;
-                    border: 1px solid #d0d0d0;
-                }
-                QTableWidget {
-                    font-size: 9px;
-                }
-            """)
-            
-            # Ajuster automatiquement la largeur des colonnes
-            header = cir_table.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Taux
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)  # Coût éligible courant
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # CIR attendue
-            
-            # Définir les largeurs de colonnes pour le CIR
-            cir_table.setColumnWidth(0, 60)   # Taux
-            cir_table.setColumnWidth(1, 150)  # Coût éligible courant
-            cir_table.setColumnWidth(2, 120)  # CIR attendue
-
             # Remplir les données du tableau avec les valeurs calculées mois par mois
             taux_k3_percent = k3 * 100  # Convertir en pourcentage
             
