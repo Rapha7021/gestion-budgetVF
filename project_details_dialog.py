@@ -6,6 +6,16 @@ import datetime
 from utils import format_montant, format_montant_aligne
 
 from database import get_connection
+from category_utils import resolve_category_code
+
+
+def _category_code(value: str) -> str:
+    code = resolve_category_code(value)
+    if code:
+        return code
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 class ProjectDetailsDialog(QDialog):
     def __init__(self, parent, projet_id):
@@ -49,23 +59,13 @@ class ProjectDetailsDialog(QDialog):
                 GROUP BY t.categorie
             ''', (projet_id,))
             categories_jours = cursor.fetchall()
-            
-            # Mapping entre les libellés complets et les codes courts
-            mapping_categories = {
-                "Stagiaire Projet": "STP",
-                "Assistante / opérateur": "AOP", 
-                "Technicien": "TEP",
-                "Junior": "IJP",
-                "Senior": "ISP",
-                "Expert": "EDP",
-                "Collaborateur moyen": "MOY"
-            }
-            
+
             couts = {"charge": 0, "direct": 0, "complet": 0}
             for categorie, total_jours in categories_jours:
-                # Convertir le libellé en code court
-                code_categorie = mapping_categories.get(categorie, categorie)
-                
+                code_categorie = _category_code(categorie)
+                if not code_categorie:
+                    continue
+
                 cursor.execute('''
                     SELECT montant_charge, cout_production, cout_complet
                     FROM categorie_cout
@@ -1158,20 +1158,12 @@ class ProjectDetailsDialog(QDialog):
             ''', (self.projet_id,))
             categories_jours = cursor.fetchall()
 
-            mapping_categories = {
-                "Stagiaire Projet": "STP",
-                "Assistante / opérateur": "AOP", 
-                "Technicien": "TEP",
-                "Junior": "IJP",
-                "Senior": "ISP",
-                "Expert": "EDP",
-                "Collaborateur moyen": "MOY"
-            }
-
             couts = {"charge": 0, "direct": 0, "complet": 0}
             missing_data = False
             for categorie, total_jours in categories_jours:
-                code_categorie = mapping_categories.get(categorie, categorie)
+                code_categorie = _category_code(categorie)
+                if not code_categorie:
+                    continue
                 cursor.execute('''
                     SELECT montant_charge, cout_production, cout_complet
                     FROM categorie_cout
@@ -1616,18 +1608,8 @@ class ProjectDetailsDialog(QDialog):
         temps_travail_rows = cursor.fetchall()
         cout_total = 0
         
-        mapping_categories = {
-            "Stagiaire Projet": "STP",
-            "Assistante / opérateur": "AOP", 
-            "Technicien": "TEP",
-            "Junior": "IJP",
-            "Senior": "ISP",
-            "Expert": "EDP",
-            "Collaborateur moyen": "MOY"
-        }
-        
         for categorie, jours in temps_travail_rows:
-            categorie_code = mapping_categories.get(categorie, "")
+            categorie_code = _category_code(categorie)
             if not categorie_code:
                 continue
             
@@ -1759,18 +1741,8 @@ class ProjectDetailsDialog(QDialog):
         temps_travail_rows = cursor.fetchall()
         cout_total = 0
         
-        mapping_categories = {
-            "Stagiaire Projet": "STP",
-            "Assistante / opérateur": "AOP", 
-            "Technicien": "TEP",
-            "Junior": "IJP",
-            "Senior": "ISP",
-            "Expert": "EDP",
-            "Collaborateur moyen": "MOY"
-        }
-        
         for categorie, jours in temps_travail_rows:
-            categorie_code = mapping_categories.get(categorie, "")
+            categorie_code = _category_code(categorie)
             if not categorie_code:
                 continue
             
@@ -1893,19 +1865,11 @@ class ProjectDetailsDialog(QDialog):
             ''', (self.projet_id,))
             categories_jours = cursor.fetchall()
             
-            mapping_categories = {
-                "Stagiaire Projet": "STP",
-                "Assistante / opérateur": "AOP", 
-                "Technicien": "TEP",
-                "Junior": "IJP",
-                "Senior": "ISP",
-                "Expert": "EDP",
-                "Collaborateur moyen": "MOY"
-            }
-            
             couts = {"charge": 0, "direct": 0, "complet": 0}
             for categorie, total_jours in categories_jours:
-                code_categorie = mapping_categories.get(categorie, categorie)
+                code_categorie = _category_code(categorie)
+                if not code_categorie:
+                    continue
                 cursor.execute('''
                     SELECT montant_charge, cout_production, cout_complet
                     FROM categorie_cout

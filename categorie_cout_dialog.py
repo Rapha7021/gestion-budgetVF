@@ -2,16 +2,7 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QSpinBox, QMessageBox, QInputDialog
 
 from database import get_connection
-
-CATEGORIES = [
-    ("STP", "Stagiaire Projet"),
-    ("AOP", "Assistante / opérateur"),
-    ("TEP", "Technicien"),
-    ("IJP", "Junior"),
-    ("ISP", "Senior"),
-    ("EDP", "Expert"),
-    ("MOY", "Collaborateur moyen")
-]
+from category_utils import DEFAULT_CATEGORIES, invalidate_category_cache
 class CategorieCoutDialog(QDialog):
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
@@ -51,6 +42,7 @@ class CategorieCoutDialog(QDialog):
         self._dirty = False
         self._loading = False
         self.brouillons = {}  # année -> valeurs du tableau
+        self.base_categories = list(DEFAULT_CATEGORIES)
         
         self.ensure_table_exists()
         self.load_custom_categories()
@@ -103,7 +95,7 @@ class CategorieCoutDialog(QDialog):
     
     def get_categories(self):
         """Retourne la liste complète des catégories (prédéfinies + personnalisées)"""
-        return CATEGORIES + self.custom_categories
+        return self.base_categories + self.custom_categories
     
     def populate_table(self):
         """Remplit le tableau avec toutes les catégories"""
@@ -116,17 +108,29 @@ class CategorieCoutDialog(QDialog):
         """Charge les catégories personnalisées depuis la base de données"""
         conn = get_connection()
         cursor = conn.cursor()
-        # Récupérer toutes les catégories uniques qui ne sont pas dans les catégories prédéfinies
-        predefined_codes = [code for code, _ in CATEGORIES]
-        placeholders = ','.join(['?' for _ in predefined_codes])
-        cursor.execute(f'''SELECT DISTINCT categorie FROM categorie_cout 
-                          WHERE categorie NOT IN ({placeholders})
-                          ORDER BY categorie''', predefined_codes)
-        
-        for row in cursor.fetchall():
-            code = row[0]
-            # Pour les catégories personnalisées, utiliser le code comme libellé par défaut
-            self.custom_categories.append((code, code))
+        predefined_codes = [code for code, _ in self.base_categories]
+        self.custom_categories = []
+
+        if predefined_codes:
+            placeholders = ','.join(['?'] * len(predefined_codes))
+            cursor.execute(
+                f'''SELECT DISTINCT categorie, libelle FROM categorie_cout 
+                    WHERE categorie NOT IN ({placeholders})
+                    ORDER BY categorie''',
+                predefined_codes,
+            )
+        else:
+            cursor.execute(
+                '''SELECT DISTINCT categorie, libelle FROM categorie_cout 
+                   ORDER BY categorie'''
+            )
+
+        for code, libelle in cursor.fetchall():
+            code = (code or '').strip()
+            if not code:
+                continue
+            label = (libelle or '').strip() or code
+            self.custom_categories.append((code, label))
         conn.close()
     
     def add_new_category(self):
@@ -207,6 +211,7 @@ class CategorieCoutDialog(QDialog):
         
         conn.commit()
         conn.close()
+        invalidate_category_cache()
     
     def delete_selected_category(self):
         """Supprime la catégorie sélectionnée"""
@@ -235,10 +240,8 @@ class CategorieCoutDialog(QDialog):
             # Supprimer des catégories personnalisées si c'en est une
             self.custom_categories = [(c, l) for c, l in self.custom_categories if c != code]
             
-            # Si c'est une catégorie prédéfinie, la retirer temporairement de CATEGORIES
-            # (Note: elle réapparaîtra au redémarrage de l'application)
-            global CATEGORIES
-            CATEGORIES = [(c, l) for c, l in CATEGORIES if c != code]
+            # Si c'est une catégorie prédéfinie, la retirer temporairement de la liste de base
+            self.base_categories = [(c, l) for c, l in self.base_categories if c != code]
             
             # Sauvegarder les brouillons actuels
             self.brouillons[self.current_year] = self.get_table_values()
@@ -252,10 +255,11 @@ class CategorieCoutDialog(QDialog):
             
             # Marquer comme modifié
             self._dirty = True
+            invalidate_category_cache()
             
             QMessageBox.information(self, 'Succès', 
                                   f'La catégorie "{code}" a été supprimée.')
-    
+
     def delete_category_from_db(self, code):
         """Supprime une catégorie de la base de données pour toutes les années"""
         conn = get_connection()
@@ -263,17 +267,20 @@ class CategorieCoutDialog(QDialog):
         cursor.execute('DELETE FROM categorie_cout WHERE categorie = ?', (code,))
         conn.commit()
         conn.close()
+        invalidate_category_cache()
 
     def update_category_code_in_lists(self, old_code, new_code):
         """Met à jour le code de catégorie dans les listes internes"""
-        # Mettre à jour dans CATEGORIES si c'est une catégorie prédéfinie
-        global CATEGORIES
-        CATEGORIES = [(new_code if code == old_code else code, libelle) 
-                     for code, libelle in CATEGORIES]
+        # Mettre à jour dans la liste de base si c'est une catégorie prédéfinie
+        self.base_categories = [
+            (new_code if code == old_code else code, libelle)
+            for code, libelle in self.base_categories
+        ]
         
         # Mettre à jour dans custom_categories si c'est une catégorie personnalisée
         self.custom_categories = [(new_code if code == old_code else code, libelle) 
                                  for code, libelle in self.custom_categories]
+        invalidate_category_cache()
 
     def change_year(self):
         # Sauvegarde le brouillon courant
@@ -481,6 +488,7 @@ class CategorieCoutDialog(QDialog):
         
         conn.commit()
         conn.close()
+        invalidate_category_cache()
         if show_message:
             QMessageBox.information(self, 'Sauvegarde', 'Les coûts ont été enregistrés avec succès.')
 

@@ -11,6 +11,7 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 
 from database import get_connection
+from category_utils import resolve_category_code
 
 class CompteResultatDisplay(QDialog):
     def __init__(self, parent, config_data):
@@ -2471,25 +2472,7 @@ class CompteResultatDisplay(QDialog):
             cout_total_temps = 0
             
             for annee, categorie, mois, jours in temps_travail_rows:
-                # Convertir la catégorie du temps de travail au format de categorie_cout
-                # MÊME LOGIQUE QUE subvention_dialog.py lignes 111-127
-                categorie_code = ""
-                if "Stagiaire" in categorie:
-                    categorie_code = "STP"
-                elif "Assistante" in categorie or "opérateur" in categorie:
-                    categorie_code = "AOP"
-                elif "Technicien" in categorie:
-                    categorie_code = "TEP"
-                elif "Junior" in categorie:
-                    categorie_code = "IJP"
-                elif "Senior" in categorie:
-                    categorie_code = "ISP"
-                elif "Expert" in categorie:
-                    categorie_code = "EDP"
-                elif "moyen" in categorie:
-                    categorie_code = "MOY"
-                
-                # Si on n'a pas trouvé de correspondance, continuer
+                categorie_code = resolve_category_code(categorie)
                 if not categorie_code:
                     continue
                     

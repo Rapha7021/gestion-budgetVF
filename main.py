@@ -13,29 +13,11 @@ import os
 import pandas as pd  # Ajout pour lecture Excel
 
 from database import get_connection, init_db
+from category_utils import list_category_labels, resolve_category_code
 
 def get_equipe_categories():
-    """Récupère les catégories d'équipe depuis la table categorie_cout"""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''SELECT DISTINCT libelle FROM categorie_cout WHERE libelle IS NOT NULL AND libelle != '' ORDER BY libelle''')
-        categories = [row[0] for row in cursor.fetchall() if row[0] and row[0].strip()]  # Filtrer les chaînes vides et les espaces
-    
-    # Si aucune catégorie n'existe, retourner les catégories par défaut
-    if not categories:
-        categories = [
-            'Stagiaire Projet',
-            'Assistante / opérateur',
-            'Technicien',
-            'Junior',
-            'Senior',
-            'Expert',
-            'Collaborateur moyen'
-        ]
-    
-    # Filtrer encore une fois pour être sûr qu'aucune chaîne vide ne passe
-    categories = [cat for cat in categories if cat and cat.strip()]
-    
+    """Récupère les catégories d'équipe avec libellés lisibles."""
+    categories = [cat for cat in list_category_labels() if cat and cat.strip()]
     return categories
 
 class MainWindow(QWidget):
@@ -1036,22 +1018,7 @@ class ProjectForm(QDialog):
         
         for annee, categorie, mois, jours in temps_travail_rows:
             # Convertir la catégorie du temps de travail au format de categorie_cout
-            categorie_code = ""
-            if "Stagiaire" in categorie:
-                categorie_code = "STP"
-            elif "Assistante" in categorie or "opérateur" in categorie:
-                categorie_code = "AOP"
-            elif "Technicien" in categorie:
-                categorie_code = "TEP"
-            elif "Junior" in categorie:
-                categorie_code = "IJP"
-            elif "Senior" in categorie:
-                categorie_code = "ISP"
-            elif "Expert" in categorie:
-                categorie_code = "EDP"
-            elif "moyen" in categorie:
-                categorie_code = "MOY"
-            
+            categorie_code = resolve_category_code(categorie)
             if not categorie_code:
                 continue
                 
