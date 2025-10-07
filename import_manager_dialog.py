@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QListWidget, QMessageBox, QHBoxLayout
-import sqlite3
 import pickle
-DB_PATH = 'gestion_budget.db'
+
+from database import get_connection
 
 class ImportManagerDialog(QDialog):
     def __init__(self, parent, projet_id):
@@ -29,7 +29,7 @@ class ImportManagerDialog(QDialog):
 
     def load_imports(self):
         self.import_list.clear()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id, filename, import_date FROM imports WHERE projet_id=? ORDER BY import_date DESC', (self.projet_id,))
         for id_, filename, import_date in cursor.fetchall():
@@ -68,7 +68,7 @@ class ImportManagerDialog(QDialog):
         if idx < 0:
             QMessageBox.warning(self, "Ouvrir", "Sélectionnez un import à ouvrir.")
             return
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT filename FROM imports WHERE projet_id=? ORDER BY import_date DESC', (self.projet_id,))
         rows = cursor.fetchall()
@@ -92,7 +92,7 @@ class ImportManagerDialog(QDialog):
         confirm = QMessageBox.question(self, "Confirmation", "Voulez-vous vraiment supprimer cet import et le fichier associé ?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id, filename FROM imports WHERE projet_id=? ORDER BY import_date DESC', (self.projet_id,))
         rows = cursor.fetchall()

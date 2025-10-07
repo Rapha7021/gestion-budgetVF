@@ -4,7 +4,8 @@ from PyQt6.QtGui import QColor
 import sqlite3
 import datetime
 from utils import format_montant, format_montant_aligne
-DB_PATH = 'gestion_budget.db'
+
+from database import get_connection
 
 class ProjectDetailsDialog(QDialog):
     def __init__(self, parent, projet_id):
@@ -15,7 +16,7 @@ class ProjectDetailsDialog(QDialog):
         self.show()
         main_layout = QVBoxLayout()
         grid = QGridLayout()
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT p.code, p.nom, p.details, p.date_debut, p.date_fin, p.livrables, 
@@ -376,7 +377,7 @@ class ProjectDetailsDialog(QDialog):
 
     def load_actualites(self):
         self.actualites_list.clear()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id, message, date FROM actualites WHERE projet_id=? ORDER BY date DESC', (self.projet_id,))
         for id_, msg, date in cursor.fetchall():
@@ -411,7 +412,7 @@ class ProjectDetailsDialog(QDialog):
         if ok and text.strip():
             from datetime import datetime
             date = datetime.now().strftime("%Y-%m-%d %H:%M")
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('INSERT INTO actualites (projet_id, message, date) VALUES (?, ?, ?)', (self.projet_id, text, date))
             conn.commit()
@@ -434,7 +435,7 @@ class ProjectDetailsDialog(QDialog):
         if ok and text.strip():
             from datetime import datetime
             date = datetime.now().strftime("%Y-%m-%d %H:%M")
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('UPDATE actualites SET message=?, date=? WHERE id=?', (text, date, id_))
             conn.commit()
@@ -449,7 +450,7 @@ class ProjectDetailsDialog(QDialog):
         id_ = item.data(Qt.ItemDataRole.UserRole)
         confirm = QMessageBox.question(self, "Confirmation", "Voulez-vous vraiment supprimer cette actualité ?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm == QMessageBox.StandardButton.Yes:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('DELETE FROM actualites WHERE id=?', (id_,))
             conn.commit()
@@ -506,7 +507,7 @@ class ProjectDetailsDialog(QDialog):
             import datetime
             from compte_resultat_display import show_compte_resultat
             
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
             date_row = cursor.fetchone()
@@ -553,7 +554,7 @@ class ProjectDetailsDialog(QDialog):
 
     def has_cir_activated(self):
         """Vérifie si le projet a le CIR activé"""
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute('SELECT cir FROM projets WHERE id = ?', (self.projet_id,))
@@ -565,7 +566,7 @@ class ProjectDetailsDialog(QDialog):
     def get_project_data_for_subventions(self, date_debut_subv=None, date_fin_subv=None):
         """Récupère les données du projet pour calculer les subventions AVEC REDISTRIBUTION AUTOMATIQUE
         Si les dates de subvention sont fournies, calcule sur cette période, sinon sur tout le projet"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         data = {
@@ -841,7 +842,7 @@ class ProjectDetailsDialog(QDialog):
 
     def refresh_cir(self, total_subventions):
         """Calcule et affiche le montant du CIR sous forme de tableau avec répartition mensuelle"""
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             
             # Récupérer les coefficients CIR et dates du projet
@@ -1050,7 +1051,7 @@ class ProjectDetailsDialog(QDialog):
 
     def calculate_total_subventions_for_cir(self):
         """Calcule le total des subventions avec la même logique que refresh_subventions"""
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             
             # Récupérer toutes les subventions pour ce projet
@@ -1146,7 +1147,7 @@ class ProjectDetailsDialog(QDialog):
 
     def refresh_budget(self):
         """Recalcule et met à jour les coûts du budget."""
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             # Recalcul des coûts
             cursor.execute('''
@@ -1237,7 +1238,7 @@ class ProjectDetailsDialog(QDialog):
             if self.has_cir_activated():
                 # Vérifier si refresh_cir n'a pas déjà été appelé dans refresh_subventions
                 has_subventions = False
-                with sqlite3.connect(DB_PATH) as conn:
+                with get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute('SELECT COUNT(*) FROM subventions WHERE projet_id = ?', (self.projet_id,))
                     has_subventions = cursor.fetchone()[0] > 0
@@ -1254,7 +1255,7 @@ class ProjectDetailsDialog(QDialog):
             if item.widget():
                 item.widget().deleteLater()
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             
             # Récupérer toutes les subventions pour ce projet avec leurs paramètres
@@ -1849,7 +1850,7 @@ class ProjectDetailsDialog(QDialog):
     def generate_print_html(self):
         """Génère le contenu HTML formaté pour l'impression"""
         # Récupérer toutes les données du projet
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_connection() as conn:
             cursor = conn.cursor()
             
             # Informations du projet

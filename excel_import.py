@@ -1,16 +1,17 @@
 import pandas as pd
 import json
-import sqlite3
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QComboBox, QTableWidget, QTableWidgetItem,
                              QFileDialog, QMessageBox, QLineEdit, QSpinBox,
                              QTextEdit, QTabWidget, QWidget, QFormLayout,
                              QCheckBox, QGroupBox, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt
 import traceback
+
+from database import get_connection
 
 class ExcelImportConfigManager:
     """Gestionnaire des configurations d'import Excel"""
@@ -70,33 +71,30 @@ class TempsTravailvailMapper:
     """Classe pour mapper les données Excel vers la table temps_travail"""
     
     def __init__(self):
-        self.db_path = "gestion_budget.db"
-        
+        pass
+    
     def get_available_projects(self) -> List[Tuple[int, str, str]]:
         """Récupère la liste des projets disponibles"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, code, nom FROM projets ORDER BY code")
-        projects = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, code, nom FROM projets ORDER BY code")
+            projects = cursor.fetchall()
         return projects
     
     def get_project_team_data(self, projet_id: int) -> List[Tuple[str, str]]:
         """Récupère les données d'équipe pour un projet (direction, catégorie)"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT direction, type FROM equipe WHERE projet_id = ?", (projet_id,))
-        team_data = cursor.fetchall()
-        conn.close()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT direction, type FROM equipe WHERE projet_id = ?", (projet_id,))
+            team_data = cursor.fetchall()
         return team_data
     
     def get_project_dates(self, projet_id: int) -> Optional[Tuple[str, str]]:
         """Récupère les dates de début et fin d'un projet"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (projet_id,))
-        dates = cursor.fetchone()
-        conn.close()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (projet_id,))
+            dates = cursor.fetchone()
         return dates
     
     def generate_months_list(self, date_debut: str, date_fin: str) -> List[str]:
@@ -293,50 +291,49 @@ class TempsTravailvailMapper:
     def save_to_database(self, data: List[Dict]) -> Tuple[bool, str]:
         """Sauvegarde les données dans la base"""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Vérifier que la table existe
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS temps_travail (
-                    projet_id INTEGER,
-                    annee INTEGER,
-                    direction TEXT,
-                    categorie TEXT,
-                    membre_id TEXT,
-                    mois TEXT,
-                    jours REAL,
-                    PRIMARY KEY (projet_id, annee, membre_id, mois)
-                )
-            """)
-            
-            # Insertion des données
-            inserted_count = 0
-            for entry in data:
-                try:
-                    # Générer un membre_id unique basé sur direction, catégorie et un index
-                    membre_id = f"{entry['direction']}_{entry['categorie']}_0"
-                    
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO temps_travail 
-                        (projet_id, annee, direction, categorie, membre_id, mois, jours)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        entry['projet_id'],
-                        entry['annee'],
-                        entry['direction'],
-                        entry['categorie'],
-                        membre_id,
-                        entry['mois'],
-                        entry['jours']
-                    ))
-                    inserted_count += 1
-                except Exception as e:
-                    print(f"Erreur insertion: {e}")
-                    continue
-            
-            conn.commit()
-            conn.close()
+            with get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Vérifier que la table existe
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS temps_travail (
+                        projet_id INTEGER,
+                        annee INTEGER,
+                        direction TEXT,
+                        categorie TEXT,
+                        membre_id TEXT,
+                        mois TEXT,
+                        jours REAL,
+                        PRIMARY KEY (projet_id, annee, membre_id, mois)
+                    )
+                """)
+
+                # Insertion des données
+                inserted_count = 0
+                for entry in data:
+                    try:
+                        # Générer un membre_id unique basé sur direction, catégorie et un index
+                        membre_id = f"{entry['direction']}_{entry['categorie']}_0"
+
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO temps_travail 
+                            (projet_id, annee, direction, categorie, membre_id, mois, jours)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            entry['projet_id'],
+                            entry['annee'],
+                            entry['direction'],
+                            entry['categorie'],
+                            membre_id,
+                            entry['mois'],
+                            entry['jours']
+                        ))
+                        inserted_count += 1
+                    except Exception as e:
+                        print(f"Erreur insertion: {e}")
+                        continue
+
+                conn.commit()
             
             return True, f"Import réussi: {inserted_count} entrées sauvegardées"
             

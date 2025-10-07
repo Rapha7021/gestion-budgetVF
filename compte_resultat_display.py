@@ -2,15 +2,15 @@ import sqlite3
 import datetime
 import re
 import traceback
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
-                            QTableWidgetItem, QPushButton, QMessageBox, 
-                            QFileDialog, QHeaderView, QGroupBox, QGridLayout, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
+                            QTableWidgetItem, QPushButton, QMessageBox,
+                            QFileDialog, QHeaderView, QGroupBox, QGridLayout,
                             QColorDialog, QLineEdit, QComboBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 
-DB_PATH = 'gestion_budget.db'
+from database import get_connection
 
 class CompteResultatDisplay(QDialog):
     def __init__(self, parent, config_data):
@@ -37,7 +37,7 @@ class CompteResultatDisplay(QDialog):
     def load_export_settings(self):
         """Charge les paramètres d'export depuis la base de données"""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM export_settings WHERE id = 1')
@@ -77,7 +77,7 @@ class CompteResultatDisplay(QDialog):
     
     def check_cir_projects(self):
         """Vérifie si au moins un projet a le CIR activé"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -195,7 +195,7 @@ class CompteResultatDisplay(QDialog):
     
     def get_project_name(self, project_id):
         """Récupère le nom d'un projet"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT code, nom FROM projets WHERE id = ?", (project_id,))
         result = cursor.fetchone()
@@ -208,7 +208,7 @@ class CompteResultatDisplay(QDialog):
     
     def get_active_months_for_year(self, year):
         """Détermine les mois actifs pour une année donnée en fonction des dates du projet"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -335,7 +335,7 @@ class CompteResultatDisplay(QDialog):
     
     def collect_financial_data(self):
         """Collecte toutes les données financières"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -563,7 +563,7 @@ class CompteResultatDisplay(QDialog):
         if len(self.project_ids) <= 3:
             # Récupérer les codes des projets
             project_codes = []
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             try:
                 for project_id in self.project_ids:
@@ -3437,7 +3437,7 @@ class ExportSettingsDialog(QDialog):
     def load_export_settings(self):
         """Charge les paramètres d'export depuis la base de données"""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             
             # Créer la table si elle n'existe pas
@@ -3488,7 +3488,7 @@ class ExportSettingsDialog(QDialog):
     
     def save_export_settings(self, settings):
         """Sauvegarde les paramètres dans la base de données"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:

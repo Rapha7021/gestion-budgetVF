@@ -12,16 +12,14 @@ import re
 import os
 import pandas as pd  # Ajout pour lecture Excel
 
-DB_PATH = 'gestion_budget.db'
+from database import get_connection, init_db
 
 def get_equipe_categories():
     """Récupère les catégories d'équipe depuis la table categorie_cout"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('''SELECT DISTINCT libelle FROM categorie_cout WHERE libelle IS NOT NULL AND libelle != '' ORDER BY libelle''')
-    categories = [row[0] for row in cursor.fetchall() if row[0] and row[0].strip()]  # Filtrer les chaînes vides et les espaces
-    conn.close()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''SELECT DISTINCT libelle FROM categorie_cout WHERE libelle IS NOT NULL AND libelle != '' ORDER BY libelle''')
+        categories = [row[0] for row in cursor.fetchall() if row[0] and row[0].strip()]  # Filtrer les chaînes vides et les espaces
     
     # Si aucune catégorie n'existe, retourner les catégories par défaut
     if not categories:
@@ -40,233 +38,6 @@ def get_equipe_categories():
     
     return categories
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS themes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT UNIQUE NOT NULL
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS projets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT NOT NULL,
-        nom TEXT NOT NULL,
-        details TEXT,
-        date_debut TEXT,
-        date_fin TEXT,
-        livrables TEXT,
-        chef TEXT,
-        etat TEXT,
-        cir INTEGER,
-        subvention INTEGER,
-        theme_principal TEXT
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS projet_themes (
-        projet_id INTEGER,
-        theme_id INTEGER,
-        FOREIGN KEY(projet_id) REFERENCES projets(id),
-        FOREIGN KEY(theme_id) REFERENCES themes(id),
-        PRIMARY KEY (projet_id, theme_id)
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS images (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        nom TEXT,
-        data BLOB,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS investissements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        nom TEXT,
-        montant REAL,
-        date_achat TEXT,
-        duree INTEGER,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS subventions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        nom TEXT,
-        mode_simplifie INTEGER DEFAULT 0,
-        montant_forfaitaire REAL DEFAULT 0,
-        depenses_temps_travail INTEGER,
-        coef_temps_travail REAL,
-        depenses_externes INTEGER,
-        coef_externes REAL,
-        depenses_autres_achats INTEGER,
-        coef_autres_achats REAL,
-        depenses_dotation_amortissements INTEGER,
-        coef_dotation_amortissements REAL,
-        cd REAL,
-        taux REAL,
-        depenses_eligibles_max REAL DEFAULT 0,
-        montant_subvention_max REAL DEFAULT 0,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    # Migration pour ajouter les nouvelles colonnes si elles n'existent pas
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN depenses_eligibles_max REAL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_subvention_max REAL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    # Migration pour les nouveaux champs du mode simplifié
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN mode_simplifie INTEGER DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_forfaitaire REAL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    # Migration pour les champs de dates de subvention
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN date_debut_subvention TEXT')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN date_fin_subvention TEXT')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    # Migration pour les champs de cache des calculs de subvention
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN assiette_eligible REAL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN montant_estime_total REAL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    
-    try:
-        cursor.execute('ALTER TABLE subventions ADD COLUMN date_derniere_maj TEXT')
-    except sqlite3.OperationalError:
-        pass  # La colonne existe déjà
-    cursor.execute('''CREATE TABLE IF NOT EXISTS equipe (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        type TEXT,
-        nombre INTEGER,
-        direction TEXT,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS actualites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        message TEXT NOT NULL,
-        date TEXT NOT NULL,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS directions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT UNIQUE NOT NULL
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS chefs_projet (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT NOT NULL,
-        prenom TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        FOREIGN KEY(direction) REFERENCES directions(nom)
-    )''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS categorie_cout (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        annee INTEGER,
-        categorie TEXT,
-        libelle TEXT,
-        montant_charge REAL,
-        cout_production REAL,
-        cout_complet REAL
-    )''')
-    
-    # Tables pour la gestion du budget et des temps de travail
-    cursor.execute('''CREATE TABLE IF NOT EXISTS temps_travail (
-        projet_id INTEGER,
-        annee INTEGER,
-        direction TEXT,
-        categorie TEXT,
-        membre_id TEXT,
-        mois TEXT,
-        jours REAL,
-        PRIMARY KEY (projet_id, annee, membre_id, mois),
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS depenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        annee INTEGER,
-        mois TEXT,
-        libelle TEXT,
-        montant REAL,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS autres_depenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        annee INTEGER,
-        mois TEXT,
-        libelle TEXT,
-        montant REAL,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS recettes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        annee INTEGER,
-        mois TEXT,
-        libelle TEXT,
-        montant REAL,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS taches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        nom TEXT NOT NULL,
-        description TEXT,
-        date_debut TEXT,
-        date_fin TEXT,
-        statut TEXT,
-        responsable TEXT,
-        FOREIGN KEY(projet_id) REFERENCES projets(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS amortissements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER,
-        investissement_id INTEGER,
-        annee INTEGER,
-        mois TEXT,
-        montant REAL,
-        FOREIGN KEY(projet_id) REFERENCES projets(id),
-        FOREIGN KEY(investissement_id) REFERENCES investissements(id)
-    )''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS cir_coeffs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        annee INTEGER UNIQUE,
-        k1 REAL,
-        k2 REAL,
-        k3 REAL
-    )''')
-    
-    conn.commit()
-    conn.close()
-
 class MainWindow(QWidget):
     def edit_project(self):
         rows = self.project_table.selectionModel().selectedRows()
@@ -275,7 +46,7 @@ class MainWindow(QWidget):
             return
         row = rows[0].row()
         code = self.project_table.item(row, 0).text()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM projets WHERE code=?', (code,))
         res = cursor.fetchone()
@@ -295,7 +66,7 @@ class MainWindow(QWidget):
             return
         row = rows[0].row()
         code = self.project_table.item(row, 0).text()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM projets WHERE code=?', (code,))
         res = cursor.fetchone()
@@ -472,7 +243,7 @@ class MainWindow(QWidget):
         self.project_table.clearContents()
         self.project_table.setRowCount(0)
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         # Jointure pour récupérer le nom complet du chef de projet + dates pour calcul automatique
         cursor.execute('''
@@ -549,7 +320,7 @@ class MainWindow(QWidget):
 
     def show_project_details(self, row, column):
         code = self.project_table.item(row, 0).text()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM projets WHERE code=?', (code,))
         res = cursor.fetchone()
@@ -715,7 +486,7 @@ class ProjectForm(QDialog):
         equipe_vbox = QVBoxLayout()
         self.direction_combo = QComboBox()
         self.directions = []
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT nom FROM directions ORDER BY nom')
         self.directions = [nom for (nom,) in cursor.fetchall()]
@@ -843,7 +614,7 @@ class ProjectForm(QDialog):
 
     def load_chefs_projet(self):
         """Load project managers into the dropdown list."""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id, nom, prenom, direction FROM chefs_projet')
         for chef_id, nom, prenom, direction in cursor.fetchall():
@@ -1047,7 +818,7 @@ class ProjectForm(QDialog):
                                 duree = int(invest_text.split('Durée amort.: ')[1].split(' ans')[0])
                             
                             # Suppression de la base de données en cherchant par les données de l'investissement
-                            conn = sqlite3.connect(DB_PATH)
+                            conn = get_connection()
                             cursor = conn.cursor()
                             cursor.execute('''DELETE FROM investissements 
                                             WHERE projet_id=? AND nom=? AND montant=? AND date_achat=? AND duree=? 
@@ -1091,7 +862,7 @@ class ProjectForm(QDialog):
             # Si le projet existe déjà, mettre à jour en base
             if self.projet_id:
                 try:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = get_connection()
                     cursor = conn.cursor()
                     # Mettre à jour l'investissement en base
                     cursor.execute('''UPDATE investissements 
@@ -1151,7 +922,7 @@ class ProjectForm(QDialog):
 
     def load_themes(self):
         self.theme_listwidget.clear()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT nom FROM themes ORDER BY nom')
         self.all_themes = [nom for (nom,) in cursor.fetchall()]
@@ -1181,7 +952,7 @@ class ProjectForm(QDialog):
                 
                 # Si le projet existe déjà, sauvegarder l'image en base de données
                 if self.projet_id:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = get_connection()
                     cursor = conn.cursor()
                     cursor.execute(
                         'INSERT INTO images (projet_id, nom, data) VALUES (?, ?, ?)',
@@ -1206,7 +977,7 @@ class ProjectForm(QDialog):
             # Si le projet existe déjà, sauvegarder immédiatement en base
             if self.projet_id:
                 try:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = get_connection()
                     cursor = conn.cursor()
                     cursor.execute('''INSERT INTO investissements (projet_id, nom, montant, date_achat, duree) 
                                       VALUES (?, ?, ?, ?, ?)''',
@@ -1226,7 +997,7 @@ class ProjectForm(QDialog):
             return 0
             
         # Utiliser la même logique que dans subvention_dialog.py pour calculer l'assiette
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         assiette_data = {
@@ -1391,7 +1162,7 @@ class ProjectForm(QDialog):
             
             # Si le projet existe déjà, sauvegarder immédiatement en base
             if self.projet_id:
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection()
                 cursor = conn.cursor()
                 try:
                     cursor.execute('''INSERT INTO subventions 
@@ -1462,7 +1233,7 @@ class ProjectForm(QDialog):
                     
                     # Si le projet existe déjà, supprimer de la base
                     if self.projet_id:
-                        conn = sqlite3.connect(DB_PATH)
+                        conn = get_connection()
                         cursor = conn.cursor()
                         # Récupérer l'ID de la subvention en base (basé sur le rang dans la liste)
                         cursor.execute('SELECT id FROM subventions WHERE projet_id=? ORDER BY id', (self.projet_id,))
@@ -1492,7 +1263,7 @@ class ProjectForm(QDialog):
             
             # Si le projet existe déjà, mettre à jour en base
             if self.projet_id:
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection()
                 cursor = conn.cursor()
                 # Récupérer l'ID de la subvention en base (basé sur le rang dans la liste)
                 cursor.execute('SELECT id FROM subventions WHERE projet_id=? ORDER BY id', (self.projet_id,))
@@ -1555,7 +1326,7 @@ class ProjectForm(QDialog):
                 if label and label in self.equipe_spins and self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
                     self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         theme_principal = self.theme_principal_combo.currentText()  # Récupère le thème principal
         if self.projet_id:
@@ -1666,7 +1437,7 @@ class ProjectForm(QDialog):
                 if label and label in self.equipe_spins and self._current_direction in self.equipe_data and label in self.equipe_data[self._current_direction]:
                     self.equipe_data[self._current_direction][label] = self.equipe_spins[label].value()
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         theme_principal = self.theme_principal_combo.currentText()  # Récupère le thème principal
         
@@ -1786,7 +1557,7 @@ class ProjectForm(QDialog):
         self.load_project_data()
 
     def load_project_data(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Chargement des données de base du projet
@@ -1984,7 +1755,7 @@ class ProjectForm(QDialog):
                     
                     if self.projet_id:
                         # Projet existant : supprimer de la base de données
-                        conn = sqlite3.connect(DB_PATH)
+                        conn = get_connection()
                         cursor = conn.cursor()
                         cursor.execute('DELETE FROM images WHERE projet_id=? AND nom=?', (self.projet_id, img_name))
                         conn.commit()
@@ -2073,7 +1844,7 @@ class ThemeManager(QDialog):
 
     def load_themes(self):
         self.theme_list.clear()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT nom FROM themes ORDER BY nom')
         for (nom,) in cursor.fetchall():
@@ -2084,7 +1855,7 @@ class ThemeManager(QDialog):
         nom = self.theme_input.text().strip()
         if not nom:
             return
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute('INSERT INTO themes (nom) VALUES (?)', (nom,))
@@ -2106,7 +1877,7 @@ class ThemeManager(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('DELETE FROM themes WHERE nom=?', (item.text(),))
             conn.commit()
@@ -2117,7 +1888,7 @@ class ThemeManager(QDialog):
         old_theme = item.text()
         new_theme, ok = QInputDialog.getText(self, 'Modifier le thème', 'Nouveau nom du thème:', text=old_theme)
         if ok and new_theme and new_theme != old_theme:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             try:
                 cursor.execute('UPDATE themes SET nom=? WHERE nom=?', (new_theme, old_theme))
@@ -2150,7 +1921,7 @@ class DirectionManager(QDialog):
 
     def load_directions(self):
         self.direction_list.clear()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT nom FROM directions ORDER BY nom')
         for (nom,) in cursor.fetchall():
@@ -2161,7 +1932,7 @@ class DirectionManager(QDialog):
         nom = self.direction_input.text().strip()
         if not nom:
             return
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute('INSERT INTO directions (nom) VALUES (?)', (nom,))
@@ -2183,7 +1954,7 @@ class DirectionManager(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('DELETE FROM directions WHERE nom=?', (item.text(),))
             conn.commit()

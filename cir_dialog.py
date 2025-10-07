@@ -1,8 +1,7 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QSpinBox, QMessageBox
 from PyQt6.QtCore import Qt
-import sqlite3
 
-DB_PATH = 'gestion_budget.db'
+from database import get_connection
 
 class CIRDialog(QDialog):
     def __init__(self, parent=None):
@@ -109,7 +108,7 @@ class CIRDialog(QDialog):
                 self._loading = False
 
     def ensure_table_exists(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS cir_coeffs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +143,7 @@ class CIRDialog(QDialog):
                 self.table.setItem(0, j, QTableWidgetItem(values.get(j, '')))
         else:
             year = self.current_year
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('''SELECT k1, k2, k3 FROM cir_coeffs WHERE annee=?''', (year,))
             res = cursor.fetchone()
@@ -173,7 +172,7 @@ class CIRDialog(QDialog):
         # Sauvegarder les valeurs actuelles dans les brouillons avant de les enregistrer
         self.brouillons[self.current_year] = self.get_table_values()
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         # Sauvegarder tous les brouillons (toutes les années modifiées)
         for year, values in self.brouillons.items():

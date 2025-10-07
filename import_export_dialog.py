@@ -4,7 +4,7 @@ import sqlite3
 import os
 import shutil
 
-DB_PATH = 'gestion_budget.db'
+from database import DB_PATH, get_connection
 
 class ImportExportDialog(QDialog):
     def __init__(self, parent=None):
@@ -109,27 +109,24 @@ class ImportExportDialog(QDialog):
     def load_projects(self):
         """Charge les projets dans la liste avec leur nom et code."""
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('SELECT code, nom FROM projets ORDER BY nom')
-            for code, nom in cursor.fetchall():
-                self.project_list.addItem(f"{code} - {nom}")
-            conn.close()
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT code, nom FROM projets ORDER BY nom')
+                for code, nom in cursor.fetchall():
+                    self.project_list.addItem(f"{code} - {nom}")
         except Exception as e:
             print(f"Erreur lors du chargement des projets: {e}")
 
     def load_tables(self):
         """Charge toutes les tables de la base de données dans la liste."""
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            for table in tables:
-                self.table_list.addItem(table)
-                
-            conn.close()
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                tables = [row[0] for row in cursor.fetchall()]
+
+                for table in tables:
+                    self.table_list.addItem(table)
         except Exception as e:
             print(f"Erreur lors du chargement des tables: {e}")
 
@@ -326,14 +323,19 @@ class ImportExportDialog(QDialog):
                 print(f"Erreur lors de la copie de {table_name}: {e}")
 
     def export_database(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, 'Enregistrer la base de données', 'gestion_budget.db', 'Base de données SQLite (*.db)')
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Enregistrer la base de données',
+            os.path.basename(DB_PATH),
+            'Base de données SQLite (*.db)'
+        )
         if file_path:
             try:
                 # Supprimer le fichier s'il existe déjà pour éviter les conflits
                 if os.path.exists(file_path):
                     os.remove(file_path)
                 
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection()
                 backup_conn = sqlite3.connect(file_path)
 
                 if self.global_radio.isChecked():

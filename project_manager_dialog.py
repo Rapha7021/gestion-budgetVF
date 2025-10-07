@@ -1,5 +1,6 @@
-import sqlite3
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QLineEdit, QLabel, QComboBox
+
+from database import get_connection
 
 class ProjectManagerDialog(QDialog):
     def __init__(self):
@@ -39,7 +40,7 @@ class ProjectManagerDialog(QDialog):
 
     def load_data(self):
         """Charge les données des chefs de projet depuis la base de données."""
-        connection = sqlite3.connect("gestion_budget.db")
+        connection = get_connection()
         cursor = connection.cursor()
 
         query = "SELECT nom, prenom, direction FROM chefs_projet"
@@ -91,7 +92,7 @@ class ProjectManagerDialog(QDialog):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        connection = sqlite3.connect("gestion_budget.db")
+        connection = get_connection()
         cursor = connection.cursor()
 
         query = "DELETE FROM chefs_projet WHERE nom = ? AND prenom = ?"
@@ -120,7 +121,7 @@ class ProjectManagerDialog(QDialog):
         direction_input = QComboBox()
 
         # Charger les directions depuis la base de données
-        connection = sqlite3.connect("gestion_budget.db")
+        connection = get_connection()
         cursor = connection.cursor()
         cursor.execute("SELECT nom FROM directions")
         directions = cursor.fetchall()
@@ -150,7 +151,7 @@ class ProjectManagerDialog(QDialog):
             new_prenom = prenom_input.text()
             new_direction = direction_input.currentText()
 
-            connection = sqlite3.connect("gestion_budget.db")
+            connection = get_connection()
             cursor = connection.cursor()
 
             if nom and prenom:  # Modification

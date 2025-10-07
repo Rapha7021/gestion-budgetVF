@@ -8,11 +8,13 @@ import sqlite3
 import re
 from calendar import month_name
 
+from database import get_connection
+
 class BudgetEditDialog(QDialog):
      
     def __init__(self, projet_id, parent=None):
         # --- Création table recettes si besoin ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier la structure actuelle de la table recettes
@@ -64,7 +66,7 @@ class BudgetEditDialog(QDialog):
         conn.commit()
         conn.close()
         # --- Création table depenses si besoin ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier la structure actuelle de la table depenses
@@ -116,7 +118,7 @@ class BudgetEditDialog(QDialog):
         conn.commit()
         conn.close()
         # --- Création table autres_depenses si besoin ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier la structure actuelle de la table autres_depenses
@@ -174,7 +176,7 @@ class BudgetEditDialog(QDialog):
         main_layout = QVBoxLayout()
 
         # --- Création table temps_travail si besoin ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier la structure actuelle de la table temps_travail
@@ -277,7 +279,7 @@ class BudgetEditDialog(QDialog):
 
         # --- Sélection de l'année en haut ---
         import re
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id=?", (self.projet_id,))
         row = cursor.fetchone()
@@ -352,7 +354,7 @@ class BudgetEditDialog(QDialog):
         self.temps_layout = QVBoxLayout(temps_widget)
 
         # --- Récupération des membres d'équipe et direction (table 'equipe') ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT type, direction, nombre FROM equipe WHERE projet_id=?", (self.projet_id,))
         equipe_rows = cursor.fetchall()
@@ -370,7 +372,7 @@ class BudgetEditDialog(QDialog):
                 membre_idx += 1
 
         # --- Récupération des investissements du projet ---
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?", (self.projet_id,))
         investissements = cursor.fetchall()
@@ -622,7 +624,7 @@ class BudgetEditDialog(QDialog):
                         
                         # Sauvegarde immédiate pour synchroniser la base de données
                         self.save_recettes_table_to_memory(year)
-                        conn = sqlite3.connect('gestion_budget.db')
+                        conn = get_connection()
                         cursor = conn.cursor()
                         
                         # Supprime toutes les recettes de cette année
@@ -715,7 +717,7 @@ class BudgetEditDialog(QDialog):
 
         def load_recettes_data_from_db_for_year(self, year, table):
             """Charge les données des recettes depuis la base pour une année spécifique et les met dans le tableau"""
-            conn = sqlite3.connect('gestion_budget.db')
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT ligne_index, mois, montant, detail 
@@ -860,7 +862,7 @@ class BudgetEditDialog(QDialog):
                         
                         # Sauvegarde immédiate pour synchroniser la base de données
                         self.save_depenses_table_to_memory(year)
-                        conn = sqlite3.connect('gestion_budget.db')
+                        conn = get_connection()
                         cursor = conn.cursor()
                         
                         # Supprime toutes les dépenses de cette année
@@ -946,7 +948,7 @@ class BudgetEditDialog(QDialog):
             self.depenses_modified_years.add(year)
 
         def load_depenses_data_from_db_for_year(self, year, table):
-            conn = sqlite3.connect('gestion_budget.db')
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT categorie, mois, montant, detail 
@@ -1089,7 +1091,7 @@ class BudgetEditDialog(QDialog):
                         
                         # Sauvegarde immédiate pour synchroniser la base de données
                         self.save_autres_depenses_table_to_memory(year)
-                        conn = sqlite3.connect('gestion_budget.db')
+                        conn = get_connection()
                         cursor = conn.cursor()
                         
                         # Supprime toutes les autres dépenses de cette année
@@ -1177,7 +1179,7 @@ class BudgetEditDialog(QDialog):
             self.autres_depenses_modified_years.add(year)
 
         def load_autres_depenses_data_from_db_for_year(self, year, table):
-            conn = sqlite3.connect('gestion_budget.db')
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT ligne_index, mois, montant, detail 
@@ -1274,7 +1276,7 @@ class BudgetEditDialog(QDialog):
             if hasattr(self, 'current_autres_depenses_year'):
                 self.save_autres_depenses_table_to_memory(self.current_autres_depenses_year)
 
-            conn = sqlite3.connect('gestion_budget.db')
+            conn = get_connection()
             cursor = conn.cursor()
 
             # Sauvegarde seulement les années modifiées pour le temps de travail
@@ -1452,7 +1454,7 @@ class BudgetEditDialog(QDialog):
 
     def load_data_from_db(self):
         """Charge les données depuis la base de données"""
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT annee, direction, categorie, mois, jours 
@@ -1465,7 +1467,7 @@ class BudgetEditDialog(QDialog):
 
     def load_data_from_db_for_year(self, year, table, colonnes):
         """Charge les données depuis la base pour une année spécifique et les met dans le tableau"""
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier si la colonne membre_id existe

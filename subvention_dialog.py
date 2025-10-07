@@ -1,8 +1,9 @@
 from PyQt6.QtWidgets import QDialog, QFormLayout, QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QLineEdit, QFrame, QDateEdit
 from PyQt6.QtCore import QDate
-import sqlite3
 import datetime
 from utils import format_montant
+
+from database import get_connection
 
 class SubventionDialog(QDialog):
     def __init__(self, parent=None, data=None):
@@ -332,7 +333,7 @@ class SubventionDialog(QDialog):
                 'amortissements': 0
             }
          
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Récupérer les dates de subvention si définies
@@ -748,7 +749,7 @@ class SubventionDialog(QDialog):
         if not project_id or not subvention_data:
             return 0
             
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -1185,7 +1186,7 @@ class SubventionDialog(QDialog):
         if not self.projet_id:
             return None, None
             
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -1417,7 +1418,7 @@ class SubventionDialog(QDialog):
         if not self.projet_id:
             return
             
-        conn = sqlite3.connect('gestion_budget.db')
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:

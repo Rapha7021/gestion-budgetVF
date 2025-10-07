@@ -1,6 +1,7 @@
 
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton, QSpinBox, QMessageBox, QInputDialog
-import sqlite3
+
+from database import get_connection
 
 CATEGORIES = [
     ("STP", "Stagiaire Projet"),
@@ -11,8 +12,6 @@ CATEGORIES = [
     ("EDP", "Expert"),
     ("MOY", "Collaborateur moyen")
 ]
-DB_PATH = 'gestion_budget.db'
-
 class CategorieCoutDialog(QDialog):
     def eventFilter(self, obj, event):
         from PyQt6.QtCore import QEvent
@@ -115,7 +114,7 @@ class CategorieCoutDialog(QDialog):
     
     def load_custom_categories(self):
         """Charge les catégories personnalisées depuis la base de données"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         # Récupérer toutes les catégories uniques qui ne sont pas dans les catégories prédéfinies
         predefined_codes = [code for code, _ in CATEGORIES]
@@ -190,7 +189,7 @@ class CategorieCoutDialog(QDialog):
     
     def add_category_for_all_years(self, code, libelle):
         """Ajoute une nouvelle catégorie vide pour toutes les années existantes"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Récupérer toutes les années existantes
@@ -259,7 +258,7 @@ class CategorieCoutDialog(QDialog):
     
     def delete_category_from_db(self, code):
         """Supprime une catégorie de la base de données pour toutes les années"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('DELETE FROM categorie_cout WHERE categorie = ?', (code,))
         conn.commit()
@@ -321,7 +320,7 @@ class CategorieCoutDialog(QDialog):
         else:
             # Si pas de brouillon, charger depuis la base
             year = self.current_year
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             for i, (code, default_libelle) in enumerate(categories):
                 if i < self.table.rowCount():  # S'assurer que la ligne existe
@@ -380,7 +379,7 @@ class CategorieCoutDialog(QDialog):
 
     def save_data(self, show_message=True):
         year = self.year_spin.value()
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         categories = self.get_categories()
         
@@ -486,7 +485,7 @@ class CategorieCoutDialog(QDialog):
             QMessageBox.information(self, 'Sauvegarde', 'Les coûts ont été enregistrés avec succès.')
 
     def ensure_table_exists(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS categorie_cout (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

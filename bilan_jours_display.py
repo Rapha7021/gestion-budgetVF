@@ -1,8 +1,7 @@
-import sqlite3
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
-                            QTableWidgetItem, QPushButton, QMessageBox, 
-                            QFileDialog, QHeaderView, QGroupBox, QGridLayout, 
-                            QColorDialog, QLineEdit, QComboBox)
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
+                             QTableWidgetItem, QPushButton, QMessageBox,
+                             QFileDialog, QHeaderView, QGroupBox, QGridLayout,
+                             QColorDialog, QLineEdit, QComboBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
@@ -11,7 +10,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import tempfile
 import os
 
-DB_PATH = 'gestion_budget.db'
+from database import get_connection
 
 class BilanJoursDisplay(QDialog):
     def __init__(self, parent, config_data):
@@ -95,7 +94,7 @@ class BilanJoursDisplay(QDialog):
     
     def get_project_name(self, project_id):
         """Récupère le nom d'un projet"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT code, nom FROM projets WHERE id = ?", (project_id,))
         result = cursor.fetchone()
@@ -144,7 +143,7 @@ class BilanJoursDisplay(QDialog):
     
     def get_active_directions(self):
         """Récupère les directions qui ont des données pour les projets/années sélectionnés"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -224,7 +223,7 @@ class BilanJoursDisplay(QDialog):
 
     def collect_jours_data(self):
         """Collecte toutes les données de jours travaillés"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:
@@ -252,7 +251,7 @@ class BilanJoursDisplay(QDialog):
     
     def get_categories(self):
         """Récupère les catégories d'équipe actives"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         try:

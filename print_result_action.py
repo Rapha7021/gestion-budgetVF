@@ -1,10 +1,9 @@
-import sqlite3
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                             QComboBox, QGroupBox, QListWidget, QListWidgetItem,
                             QRadioButton, QButtonGroup, QMessageBox)
 from PyQt6.QtCore import Qt
 
-DB_PATH = 'gestion_budget.db'
+from database import get_connection
 
 class PrintConfigDialog(QDialog):
     def __init__(self, parent, projet_id=None):
@@ -161,7 +160,7 @@ class PrintConfigDialog(QDialog):
 
     def load_projects(self):
         """Charge les projets depuis la base de données"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, code, nom FROM projets ORDER BY code")
         projects = cursor.fetchall()
@@ -182,7 +181,7 @@ class PrintConfigDialog(QDialog):
 
     def load_themes(self):
         """Charge les thèmes depuis la base de données"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, nom FROM themes ORDER BY nom")
         themes = cursor.fetchall()
@@ -204,7 +203,7 @@ class PrintConfigDialog(QDialog):
 
     def load_main_themes(self):
         """Charge les thèmes principaux depuis la base de données"""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT theme_principal FROM projets WHERE theme_principal IS NOT NULL AND theme_principal != '' ORDER BY theme_principal")
         main_themes = cursor.fetchall()
@@ -235,7 +234,7 @@ class PrintConfigDialog(QDialog):
             self.years_list_widget.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
@@ -272,7 +271,7 @@ class PrintConfigDialog(QDialog):
 
     def update_years_for_all_projects(self):
         """Met à jour la liste déroulante des années avec toutes les années où il y a au moins un projet."""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT date_debut, date_fin FROM projets WHERE date_debut IS NOT NULL AND date_fin IS NOT NULL")
@@ -316,7 +315,7 @@ class PrintConfigDialog(QDialog):
 
     def update_years_for_all_projects_multiple(self):
         """Met à jour la liste des années cochables avec toutes les années où il y a au moins un projet."""
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT date_debut, date_fin FROM projets WHERE date_debut IS NOT NULL AND date_fin IS NOT NULL")
@@ -374,7 +373,7 @@ class PrintConfigDialog(QDialog):
             self.year_combo.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les dates des projets sélectionnés
@@ -434,7 +433,7 @@ class PrintConfigDialog(QDialog):
             self.years_list_widget.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les dates des projets sélectionnés
@@ -495,7 +494,7 @@ class PrintConfigDialog(QDialog):
             self.year_combo.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les projets liés aux thèmes sélectionnés
@@ -557,7 +556,7 @@ class PrintConfigDialog(QDialog):
             self.years_list_widget.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les projets liés aux thèmes sélectionnés
@@ -621,7 +620,7 @@ class PrintConfigDialog(QDialog):
             self.year_combo.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les projets avec les thèmes principaux sélectionnés
@@ -682,7 +681,7 @@ class PrintConfigDialog(QDialog):
             self.years_list_widget.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les projets avec les thèmes principaux sélectionnés
@@ -768,7 +767,7 @@ class PrintConfigDialog(QDialog):
                 
         elif self.radio_all_projects.isChecked():
             # Tous les projets
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM projets")
             project_ids = [row[0] for row in cursor.fetchall()]
@@ -790,7 +789,7 @@ class PrintConfigDialog(QDialog):
                     selected_theme_ids.append(item.data(Qt.ItemDataRole.UserRole))
             
             if selected_theme_ids:
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection()
                 cursor = conn.cursor()
                 placeholders = ','.join('?' * len(selected_theme_ids))
                 cursor.execute(f"""
@@ -808,7 +807,7 @@ class PrintConfigDialog(QDialog):
                     selected_main_themes.append(item.data(Qt.ItemDataRole.UserRole))
             
             if selected_main_themes:
-                conn = sqlite3.connect(DB_PATH)
+                conn = get_connection()
                 cursor = conn.cursor()
                 placeholders = ','.join('?' * len(selected_main_themes))
                 cursor.execute(f"""
@@ -834,7 +833,7 @@ class PrintConfigDialog(QDialog):
             self.years_list_widget.clear()
             return
             
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             # Récupérer les projets sélectionnés avec leurs dates
@@ -877,7 +876,7 @@ class PrintConfigDialog(QDialog):
             self.year_combo.clear()
             return
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
@@ -1095,7 +1094,7 @@ class PrintConfigDialog(QDialog):
         if not project_ids:
             return []
         
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             placeholders = ','.join('?' * len(project_ids))

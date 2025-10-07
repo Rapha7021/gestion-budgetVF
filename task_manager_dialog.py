@@ -1,11 +1,11 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QInputDialog, QDateEdit, QTextEdit, QDialogButtonBox, QLabel, QLineEdit, QDoubleSpinBox
 from PyQt6.QtCore import QDate
-import sqlite3
-DB_PATH = 'gestion_budget.db'
+
+from database import get_connection
 
 class TaskManagerDialog(QDialog):
     def repartir_budget_automatiquement(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id, pourcentage_budget FROM taches WHERE projet_id=?', (self.projet_id,))
         rows = cursor.fetchall()
@@ -55,7 +55,7 @@ class TaskManagerDialog(QDialog):
 
     def load_tasks(self):
         self.table.setRowCount(0)
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Vérifier la structure actuelle de la table taches
@@ -120,7 +120,7 @@ class TaskManagerDialog(QDialog):
             self.task_ids.append(id_)
         conn.close()
     def get_total_pourcentage_budget(self):
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT SUM(pourcentage_budget) FROM taches WHERE projet_id=?', (self.projet_id,))
         result = cursor.fetchone()
@@ -143,7 +143,7 @@ class TaskManagerDialog(QDialog):
                 continue
 
             # Fetch project start and end dates
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id=?', (self.projet_id,))
             projet_dates = cursor.fetchone()
@@ -160,7 +160,7 @@ class TaskManagerDialog(QDialog):
                 QMessageBox.warning(self, "Erreur budget", "La somme des pourcentages du budget dépasse 100%. Veuillez ajuster la répartition.")
                 continue
 
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('INSERT INTO taches (projet_id, nom, date_debut, date_fin, details, pourcentage_budget) VALUES (?, ?, ?, ?, ?, ?)',
                            (self.projet_id, nom, date_debut, date_fin, details, pourcentage_budget))
@@ -189,7 +189,7 @@ class TaskManagerDialog(QDialog):
         confirm = QMessageBox.question(self, "Confirmation", "Voulez-vous vraiment supprimer cette tâche ?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm != QMessageBox.StandardButton.Yes:
             return
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM taches WHERE projet_id=?', (self.projet_id,))
         rows = cursor.fetchall()
@@ -228,7 +228,7 @@ class TaskManagerDialog(QDialog):
                 continue
 
             # Fetch project start and end dates
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id=?', (self.projet_id,))
             projet_dates = cursor.fetchone()
@@ -241,7 +241,7 @@ class TaskManagerDialog(QDialog):
                     continue
 
             task_id = self.task_ids[idx]
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_connection()
             cursor = conn.cursor()
             cursor.execute('UPDATE taches SET nom=?, date_debut=?, date_fin=?, details=?, pourcentage_budget=? WHERE id=?',
                            (nom, date_debut, date_fin, details, pourcentage_budget, task_id))
