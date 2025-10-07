@@ -461,7 +461,10 @@ class MainWindow(QWidget):
             return "En cours"
 
     def load_projects(self):
+        # Vider complètement le tableau
+        self.project_table.clearContents()
         self.project_table.setRowCount(0)
+        
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         # Jointure pour récupérer le nom complet du chef de projet + dates pour calcul automatique
@@ -473,8 +476,12 @@ class MainWindow(QWidget):
         ''')
         
         projects_to_update = []  # Liste des projets dont l'état doit être mis à jour
+        results = cursor.fetchall()
         
-        for row_idx, (pid, code, nom, chef_complet, etat_actuel, date_debut, date_fin) in enumerate(cursor.fetchall()):
+        # Définir le nombre de lignes avant d'insérer les données
+        self.project_table.setRowCount(len(results))
+        
+        for row_idx, (pid, code, nom, chef_complet, etat_actuel, date_debut, date_fin) in enumerate(results):
             # Calculer l'état automatique basé sur les dates
             etat_auto = self.calculate_project_status(date_debut, date_fin)
             
@@ -485,8 +492,7 @@ class MainWindow(QWidget):
             else:
                 etat_affiche = etat_actuel  # Garder l'état existant
             
-            # Ajouter la ligne au tableau
-            self.project_table.insertRow(row_idx)
+            # Ajouter la ligne au tableau (pas besoin d'insertRow car on a déjà défini le nombre de lignes)
             self.project_table.setItem(row_idx, 0, QTableWidgetItem(str(code)))
             self.project_table.setItem(row_idx, 1, QTableWidgetItem(str(nom)))
             self.project_table.setItem(row_idx, 2, QTableWidgetItem(str(chef_complet) if chef_complet else "Non assigné"))

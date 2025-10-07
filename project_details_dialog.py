@@ -466,13 +466,12 @@ class ProjectDetailsDialog(QDialog):
             form = ProjectForm(self, self.projet_id)
             if form.exec():
                 # Si le projet a été modifié, rafraîchir les données de cette page
-                QMessageBox.information(
-                    self, 
-                    "Projet modifié", 
-                    "Le projet a été modifié avec succès.\n"
-                    "Les données vont être actualisées."
-                )
-                self.refresh_project_data()  # Rafraîchir les données
+                self.refresh_project_data()  # Rafraîchir les données de cette page
+                
+                # Également rafraîchir la liste des projets de la fenêtre principale
+                if hasattr(self.parent(), 'load_projects'):
+                    self.parent().load_projects()
+                    
         except ImportError as e:
             QMessageBox.critical(
                 self, "Erreur", 
