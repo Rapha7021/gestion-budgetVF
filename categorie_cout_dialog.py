@@ -329,22 +329,45 @@ class CategorieCoutDialog(QDialog):
             year = self.current_year
             conn = get_connection()
             cursor = conn.cursor()
-            for i, (code, default_libelle) in enumerate(categories):
-                if i < self.table.rowCount():  # S'assurer que la ligne existe
-                    cursor.execute('''SELECT libelle, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, code))
-                    res = cursor.fetchone()
-                    
-                    # Charger le libellé depuis la DB si disponible, sinon utiliser le défaut
-                    libelle_to_use = res[0] if res and res[0] else default_libelle
-                    self.table.setItem(i, 1, QTableWidgetItem(libelle_to_use))
-                    
-                    for j in range(2, 5):
-                        self.table.setItem(i, j, QTableWidgetItem(''))
-                    if res:
-                        self.table.setItem(i, 2, QTableWidgetItem('' if res[1] is None else str(res[1])))
-                        self.table.setItem(i, 3, QTableWidgetItem('' if res[2] is None else str(res[2])))
-                        self.table.setItem(i, 4, QTableWidgetItem('' if res[3] is None else str(res[3])))
+            cursor.execute(
+                '''SELECT categorie, libelle, montant_charge, cout_production, cout_complet 
+                   FROM categorie_cout WHERE annee=?''',
+                (year,),
+            )
+            rows = cursor.fetchall()
             conn.close()
+
+            # Préparer un accès direct par code pour éviter une requête par ligne
+            data_by_code = {}
+            for db_code, libelle, montant_charge, cout_production, cout_complet in rows:
+                normalized_code = (db_code or '').strip().upper()
+                if not normalized_code:
+                    continue
+                data_by_code[normalized_code] = (
+                    libelle,
+                    montant_charge,
+                    cout_production,
+                    cout_complet,
+                )
+
+            for i, (code, default_libelle) in enumerate(categories):
+                if i >= self.table.rowCount():
+                    continue
+
+                normalized_code = (code or '').strip().upper()
+                db_values = data_by_code.get(normalized_code)
+
+                # Charger le libellé depuis la DB si disponible, sinon utiliser le défaut
+                libelle_to_use = db_values[0] if db_values and db_values[0] else default_libelle
+                self.table.setItem(i, 1, QTableWidgetItem(libelle_to_use))
+
+                montant_charge = db_values[1] if db_values else None
+                cout_production = db_values[2] if db_values else None
+                cout_complet = db_values[3] if db_values else None
+
+                self.table.setItem(i, 2, QTableWidgetItem('' if montant_charge is None else str(montant_charge)))
+                self.table.setItem(i, 3, QTableWidgetItem('' if cout_production is None else str(cout_production)))
+                self.table.setItem(i, 4, QTableWidgetItem('' if cout_complet is None else str(cout_complet)))
         self._loading = False
 
     def mark_dirty(self, row, column):
@@ -389,102 +412,95 @@ class CategorieCoutDialog(QDialog):
         conn = get_connection()
         cursor = conn.cursor()
         categories = self.get_categories()
+
+        cursor.execute(
+            '''SELECT id, categorie FROM categorie_cout WHERE annee=?''',
+            (year,),
+        )
+        existing_ids_by_code = {}
+        for row_id, db_code in cursor.fetchall():
+            normalized_code = (db_code or '').strip().upper()
+            if normalized_code:
+                existing_ids_by_code[normalized_code] = row_id
+
+        def parse_float(item):
+            if item and item.text() and item.text().strip():
+                try:
+                    return float(item.text().replace(',', '.'))
+                except Exception:
+                    return None
+            return None
         
         for i, (original_code, original_libelle) in enumerate(categories):
             if i < self.table.rowCount():  # S'assurer que la ligne existe
                 # Récupérer les valeurs modifiées depuis le tableau
                 code_item = self.table.item(i, 0)
-                current_code = code_item.text().strip().upper() if code_item else original_code
-                
+                current_code = ''
+                if code_item and code_item.text():
+                    current_code = code_item.text().strip().upper()
+                if not current_code:
+                    current_code = (original_code or '').strip().upper()
+
                 libelle_item = self.table.item(i, 1)
-                current_libelle = libelle_item.text() if libelle_item else original_libelle
-                
-                # Vérifier si le code a changé
-                code_changed = current_code != original_code
-                
+                current_libelle = libelle_item.text() if libelle_item and libelle_item.text() else original_libelle
+
+                original_code_key = (original_code or '').strip().upper()
+                code_changed = current_code != original_code_key
+                original_id = existing_ids_by_code.get(original_code_key)
+                target_id = existing_ids_by_code.get(current_code)
+
                 if code_changed:
-                    # Vérifier que le nouveau code n'existe pas déjà pour cette année
-                    cursor.execute('''SELECT id FROM categorie_cout WHERE annee=? AND categorie=? AND categorie!=?''', 
-                                 (year, current_code, original_code))
-                    if cursor.fetchone():
+                    if target_id is not None and target_id != original_id:
                         if show_message:
                             QMessageBox.warning(self, 'Erreur', f'Le code "{current_code}" existe déjà pour cette année.')
                         continue
-                    
-                    # Demander si on veut changer le code pour toutes les années
-                    reply = QMessageBox.question(self, 'Changement de code', 
-                                               f'Voulez-vous changer le code "{original_code}" en "{current_code}" pour toutes les années ?\n'
-                                               'Si vous choisissez "Non", seule l\'année courante sera modifiée.',
-                                               QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    
+
+                    reply = QMessageBox.question(
+                        self,
+                        'Changement de code',
+                        f'Voulez-vous changer le code "{original_code}" en "{current_code}" pour toutes les années ?\n'
+                        'Si vous choisissez "Non", seule l\'année courante sera modifiée.',
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    )
+
                     if reply == QMessageBox.StandardButton.Yes:
-                        # Changer pour toutes les années
-                        cursor.execute('''UPDATE categorie_cout SET categorie=? WHERE categorie=?''', 
-                                     (current_code, original_code))
-                        # Mettre à jour aussi dans les listes de catégories
+                        cursor.execute(
+                            '''UPDATE categorie_cout SET categorie=? WHERE categorie=?''',
+                            (current_code, original_code),
+                        )
                         self.update_category_code_in_lists(original_code, current_code)
-                        # Continuer avec la logique normale pour cette année
-                    # Si Non, on continue avec la logique normale qui ne mettra à jour que cette année
-                
-                # Récupérer les valeurs existantes - utiliser le code actuel après changement éventuel
-                search_code = current_code if code_changed else original_code
-                cursor.execute('''SELECT id, montant_charge, cout_production, cout_complet FROM categorie_cout WHERE annee=? AND categorie=?''', (year, search_code))
-                res = cursor.fetchone()
-                
-                # Préparer les champs à mettre à jour
-                update_fields = {}
-                
-                # Toujours inclure le libellé
-                update_fields['libelle'] = current_libelle
-                
-                # Si le code a changé, l'inclure aussi
+
+                    if original_id is not None:
+                        existing_ids_by_code.pop(original_code_key, None)
+                        existing_ids_by_code[current_code] = original_id
+                else:
+                    if original_id is not None:
+                        existing_ids_by_code[original_code_key] = original_id
+
+                update_fields = {'libelle': current_libelle}
                 if code_changed:
                     update_fields['categorie'] = current_code
-                
-                # Montant chargé
-                val = self.table.item(i, 2)
-                if val and val.text().strip():
-                    try:
-                        update_fields['montant_charge'] = float(val.text().replace(',', '.'))
-                    except Exception:
-                        update_fields['montant_charge'] = None
-                else:
-                    update_fields['montant_charge'] = None
-                    
-                # Coût de production
-                val = self.table.item(i, 3)
-                if val and val.text().strip():
-                    try:
-                        update_fields['cout_production'] = float(val.text().replace(',', '.'))
-                    except Exception:
-                        update_fields['cout_production'] = None
-                else:
-                    update_fields['cout_production'] = None
-                    
-                # Coût complet
-                val = self.table.item(i, 4)
-                if val and val.text().strip():
-                    try:
-                        update_fields['cout_complet'] = float(val.text().replace(',', '.'))
-                    except Exception:
-                        update_fields['cout_complet'] = None
-                else:
-                    update_fields['cout_complet'] = None
-                        
-                if res:
-                    # Mise à jour de l'enregistrement existant
+
+                update_fields['montant_charge'] = parse_float(self.table.item(i, 2))
+                update_fields['cout_production'] = parse_float(self.table.item(i, 3))
+                update_fields['cout_complet'] = parse_float(self.table.item(i, 4))
+
+                record_key = current_code if code_changed else original_code_key
+                record_id = existing_ids_by_code.get(record_key)
+
+                if record_id:
                     set_clause = ', '.join([f"{k}=?" for k in update_fields.keys()])
                     sql = f"UPDATE categorie_cout SET {set_clause} WHERE id=?"
-                    cursor.execute(sql, list(update_fields.values()) + [res[0]])
+                    cursor.execute(sql, list(update_fields.values()) + [record_id])
                 else:
-                    # Insertion d'un nouvel enregistrement - toujours inclure tous les champs
                     update_fields['annee'] = year
                     update_fields['categorie'] = current_code
-                    
+
                     fields = ', '.join(update_fields.keys())
                     placeholders = ', '.join(['?'] * len(update_fields))
                     sql = f"INSERT INTO categorie_cout ({fields}) VALUES ({placeholders})"
                     cursor.execute(sql, list(update_fields.values()))
+                    existing_ids_by_code[current_code] = cursor.lastrowid
         
         conn.commit()
         conn.close()
