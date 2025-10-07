@@ -373,7 +373,7 @@ class MainWindow(QWidget):
         self.project_table.setSortingEnabled(True)
         main_area.addWidget(self.project_table)
         
-        # Zone droite avec le bouton "Imprimer le budget" centré verticalement
+        # Zone droite avec les boutons "Imprimer le budget" et "Bilan des jours" centrés verticalement
         right_area = QVBoxLayout()
         right_area.addStretch()  # Espace au-dessus pour centrer
         self.btn_print_budget = QPushButton('Imprimer le budget')
@@ -381,6 +381,12 @@ class MainWindow(QWidget):
         self.btn_print_budget.setMinimumWidth(150)
         self.btn_print_budget.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; }")
         right_area.addWidget(self.btn_print_budget)
+        
+        self.btn_bilan_jours = QPushButton('Imprimer le bilan des jours')
+        self.btn_bilan_jours.setMinimumHeight(60)  # Plus gros
+        self.btn_bilan_jours.setMinimumWidth(150)
+        self.btn_bilan_jours.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; }")
+        right_area.addWidget(self.btn_bilan_jours)
         right_area.addStretch()  # Espace en dessous pour centrer
         
         main_area.addLayout(right_area)
@@ -418,6 +424,7 @@ class MainWindow(QWidget):
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
         self.btn_cir.clicked.connect(self.open_cir_dialog)
         self.btn_print_budget.clicked.connect(self.handle_print_budget)
+        self.btn_bilan_jours.clicked.connect(self.handle_bilan_jours)
         self.btn_directions.clicked.connect(self.open_direction_manager)
         self.btn_project_managers.clicked.connect(self.open_project_manager_dialog)
         self.btn_import_export.clicked.connect(self.open_import_export_dialog)
@@ -534,6 +541,11 @@ class MainWindow(QWidget):
         """Ouvrir le dialogue d'impression de budget avec sélection de projet"""
         from print_result_action import show_print_config_dialog
         show_print_config_dialog(self, None)
+
+    def handle_bilan_jours(self):
+        """Ouvrir le dialogue de configuration du bilan des jours"""
+        from bilan_jours_config_dialog import show_bilan_jours_config_dialog
+        show_bilan_jours_config_dialog(self, None)
 
     def show_project_details(self, row, column):
         code = self.project_table.item(row, 0).text()
