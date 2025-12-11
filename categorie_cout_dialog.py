@@ -8,10 +8,33 @@ class CategorieCoutDialog(QDialog):
         from PyQt6.QtCore import QEvent
         if obj == self.table and event.type() == QEvent.Type.KeyPress:
             from PyQt6.QtGui import QKeySequence
-            if event.matches(QKeySequence.StandardKey.Paste):
+            if event.matches(QKeySequence.StandardKey.Copy):
+                self.copy_to_clipboard()
+                return True
+            elif event.matches(QKeySequence.StandardKey.Paste):
                 self.paste_from_clipboard()
                 return True
         return super().eventFilter(obj, event)
+
+    def copy_to_clipboard(self):
+        from PyQt6.QtWidgets import QApplication
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            return
+        
+        # Prendre la première sélection
+        selection = selected_ranges[0]
+        rows = []
+        for row in range(selection.topRow(), selection.bottomRow() + 1):
+            cols = []
+            for col in range(selection.leftColumn(), selection.rightColumn() + 1):
+                item = self.table.item(row, col)
+                cols.append(item.text() if item else '')
+            rows.append('\t'.join(cols))
+        
+        text = '\n'.join(rows)
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
 
     def paste_from_clipboard(self):
         from PyQt6.QtWidgets import QApplication

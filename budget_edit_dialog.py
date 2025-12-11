@@ -1281,10 +1281,11 @@ class BudgetEditDialog(QDialog):
 
             # Sauvegarde seulement les années modifiées pour le temps de travail
             for annee in self.modified_years:
+                # Toujours supprimer les anciennes données, même si pas de nouvelles données
+                cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
+                
                 data = self.budget_data.get(annee, {})
-                if data:  # Seulement si il y a des données
-                    cursor.execute("DELETE FROM temps_travail WHERE projet_id=? AND annee=?", (self.projet_id, int(annee)))
-                    
+                if data:  # Seulement si il y a des données à insérer
                     for key, val_data in data.items():
                         row_index, mois = key
                         if isinstance(val_data, dict):
@@ -1422,8 +1423,8 @@ class BudgetEditDialog(QDialog):
                     }
         
         self.budget_data[year] = data
-        if data:  # Marque l'année comme modifiée seulement si il y a des données
-            self.modified_years.add(year)
+        # Marque toujours l'année comme modifiée, même si data est vide (suppression)
+        self.modified_years.add(year)
 
 
     def restore_table_from_memory(self, year, table, colonnes, directions):

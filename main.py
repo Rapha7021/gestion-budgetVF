@@ -221,6 +221,9 @@ class MainWindow(QWidget):
             return "En cours"
 
     def load_projects(self):
+        # Désactiver temporairement le tri pour éviter les bugs d'affichage
+        self.project_table.setSortingEnabled(False)
+        
         # Vider complètement le tableau
         self.project_table.clearContents()
         self.project_table.setRowCount(0)
@@ -266,6 +269,9 @@ class MainWindow(QWidget):
             conn.commit()  # Sauvegarder les changements seulement s'il y en a
             
         conn.close()
+        
+        # Réactiver le tri après avoir mis à jour toutes les données
+        self.project_table.setSortingEnabled(True)
 
     def open_project_form(self):
         form = ProjectForm(self)
@@ -315,6 +321,8 @@ class MainWindow(QWidget):
         from project_details_dialog import ProjectDetailsDialog
         dialog = ProjectDetailsDialog(self, projet_id)
         dialog.exec()
+        # Rafraîchir la liste après fermeture du dialogue (au cas où des modifications auraient été faites)
+        self.load_projects()
 
     def open_import_export_dialog(self):
         from import_export_dialog import ImportExportDialog
