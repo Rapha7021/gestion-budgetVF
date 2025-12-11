@@ -97,7 +97,7 @@ class ProjectDetailsDialog(QDialog):
                         SUM((cc.cout_production * t.jours)) AS total_direct,
                         SUM((cc.cout_complet * t.jours)) AS total_complet
                     FROM temps_travail t
-                    LEFT JOIN categorie_cout cc ON t.categorie = cc.categorie
+                    LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
                     WHERE t.projet_id = ?
                 ''', (self.projet_id,))
                 couts_result = cursor.fetchone()
@@ -967,35 +967,43 @@ class ProjectDetailsDialog(QDialog):
             # UTILISER EXACTEMENT LA MÊME LOGIQUE QUE LE COMPTE DE RÉSULTAT
             # Importer la classe CompteResultatDisplay pour utiliser ses méthodes
             from compte_resultat_display import CompteResultatDisplay
-            temp_compte_resultat = CompteResultatDisplay(self, {'project_ids': [self.projet_id], 'years': list(range(debut_projet.year, fin_projet.year + 1))})
+            temp_compte_resultat = CompteResultatDisplay(self, {
+                'project_ids': [self.projet_id], 
+                'years': list(range(debut_projet.year, fin_projet.year + 1)),
+                'period_type': 'monthly',
+                'granularity': 'monthly',
+                'cost_type': 'montant_charge'
+            })
             
-            # Calculer le CIR mois par mois en utilisant la même méthode que le compte de résultat
+            # Calculer le CIR mois par mois en utilisant EXACTEMENT la même méthode que le compte de résultat
             current_date = debut_projet
             while current_date <= fin_projet:
                 year = current_date.year
                 month = current_date.month
                 
-                # Calculer les éléments pour ce mois EXACTEMENT comme dans le compte de résultat
-                temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
-                    cursor, self.projet_id, year, month, 'montant_charge'
-                )
-                amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
-                    cursor, self.projet_id, year, month
-                )
-                projet_info = (date_row[0], date_row[1])
-                total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
-                    cursor, self.projet_id, year, month, projet_info
-                )
-                
-                # Calculer l'assiette éligible pour ce mois
-                assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
-                
                 # Calculer le CIR pour ce mois en utilisant EXACTEMENT la même méthode que le compte de résultat
+                # Cette méthode calcule automatiquement l'assiette éligible et retourne le CIR
                 cir_mensuel = temp_compte_resultat.calculate_distributed_cir(cursor, year, month)
                 
-                if assiette_mensuelle > 0 and cir_mensuel > 0:
-                    montant_net_eligible_total += assiette_mensuelle
+                # Accumuler le CIR total
+                if cir_mensuel > 0:
                     cir_total += cir_mensuel
+                    
+                    # Calculer aussi l'assiette pour l'affichage (uniquement pour les mois où le CIR est positif)
+                    temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
+                        cursor, self.projet_id, year, month, 'montant_charge'
+                    )
+                    amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
+                        cursor, self.projet_id, year, month
+                    )
+                    projet_info = (date_row[0], date_row[1])
+                    total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
+                        cursor, self.projet_id, year, month, projet_info
+                    )
+                    
+                    assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
+                    if assiette_mensuelle > 0:
+                        montant_net_eligible_total += assiette_mensuelle
                 
                 # Passer au mois suivant
                 if current_date.month == 12:
@@ -1187,9 +1195,9 @@ class ProjectDetailsDialog(QDialog):
                     SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
                     SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
                     SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet,
-                    COUNT(CASE WHEN cc.categorie IS NULL THEN 1 END) AS missing_count
+                    COUNT(CASE WHEN cc.libelle IS NULL THEN 1 END) AS missing_count
                 FROM temps_travail t
-                LEFT JOIN categorie_cout cc ON t.categorie = cc.categorie
+                LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
                 WHERE t.projet_id = ?
             ''', (self.projet_id,))
             couts_result = cursor.fetchone()
