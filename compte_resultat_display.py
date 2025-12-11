@@ -215,12 +215,15 @@ class CompteResultatDisplay(QDialog):
         try:
             # Récupérer les dates de début et fin de tous les projets
             active_months = set()
+            has_project_without_dates = False
             
             for project_id in self.project_ids:
                 cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
                 project_info = cursor.fetchone()
                 
                 if not project_info or not project_info[0] or not project_info[1]:
+                    # Au moins un projet n'a pas de dates : on inclura tous les mois
+                    has_project_without_dates = True
                     continue
                 
                 try:
@@ -240,6 +243,11 @@ class CompteResultatDisplay(QDialog):
                             
                 except (ValueError, TypeError):
                     continue
+            
+            # Si au moins un projet n'a pas de dates, inclure tous les mois de l'année
+            if has_project_without_dates:
+                for month in range(1, 13):
+                    active_months.add(month)
             
             return sorted(active_months)
             
@@ -409,8 +417,9 @@ class CompteResultatDisplay(QDialog):
                 cursor.execute("SELECT date_debut, date_fin FROM projets WHERE id = ?", (project_id,))
                 projet_info = cursor.fetchone()
                 
-                if not projet_info or not projet_info[0] or not projet_info[1]:
-                    continue  # Pas de dates de projet, skip
+                # Ne pas ignorer les projets sans dates - la fonction de calcul gère ces cas
+                # if not projet_info or not projet_info[0] or not projet_info[1]:
+                #     continue  # Pas de dates de projet, skip
                 
                 # Calculer la subvention pour ce projet et cette période
                 subvention_periode = self.calculate_smart_distributed_subvention(
@@ -1418,6 +1427,8 @@ class CompteResultatDisplay(QDialog):
             return subvention_total_periode
             
         except Exception as e:
+            # En cas d'erreur, afficher l'erreur pour débogage mais continuer
+            print(f"Erreur calcul subvention projet {project_id}: {str(e)}")
             return 0
     
     def calculate_subvention_with_redistribution(self, cursor, project_id, subvention_data, year, month, date_debut, date_fin):
@@ -1459,6 +1470,37 @@ class CompteResultatDisplay(QDialog):
             if montant_total_subvention <= 0:
                 return 0
             
+            # MODE SIMPLIFIÉ : Répartition temporelle (par nombre de mois)
+            if subvention_data.get('mode_simplifie', 0):
+                # Calculer le nombre total de mois de la période de subvention
+                total_mois_subvention = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
+                
+                # Déterminer combien de mois de la période cible sont dans la période de subvention
+                if month is not None:
+                    # Un seul mois demandé
+                    target_date = datetime.datetime(year, month, 1)
+                    if debut_subv <= target_date <= fin_subv:
+                        mois_couverts = 1
+                    else:
+                        return 0
+                else:
+                    # Toute l'année demandée : compter les mois couverts
+                    mois_couverts = 0
+                    for mois in range(1, 13):
+                        mois_date = datetime.datetime(year, mois, 1)
+                        if debut_subv <= mois_date <= fin_subv:
+                            mois_couverts += 1
+                    
+                    if mois_couverts == 0:
+                        return 0
+                
+                # Répartir proportionnellement au nombre de mois
+                proportion = mois_couverts / total_mois_subvention if total_mois_subvention > 0 else 0
+                montant_reparti = montant_total_subvention * proportion
+                
+                return montant_reparti
+            
+            # MODE DÉTAILLÉ : Répartition proportionnelle aux dépenses éligibles
             # Calculer les dépenses éligibles totales sur la période de subvention (avec redistribution)
             depenses_eligibles_totales = self.calculate_total_eligible_expenses_with_redistribution(
                 cursor, project_id, subvention_data, date_debut, date_fin
@@ -1694,7 +1736,13 @@ class CompteResultatDisplay(QDialog):
                 return 0
             
             # 2. Déterminer les mois actifs pour cette année
-            active_months = self.get_active_months_for_year(year)
+            # Si le projet n'a pas de dates, considérer tous les mois de l'année comme actifs
+            if not projet_info or not projet_info[0] or not projet_info[1]:
+                # Pas de dates de projet : répartir sur tous les 12 mois de l'année
+                active_months = list(range(1, 13))
+            else:
+                # Projet avec dates : utiliser la méthode normale
+                active_months = self.get_active_months_for_year(year)
             
             if not active_months or month not in active_months:
                 return 0
@@ -1705,6 +1753,7 @@ class CompteResultatDisplay(QDialog):
             return subvention_mensuelle
             
         except Exception as e:
+            print(f"Erreur calcul monthly subvention fallback: {str(e)}")
             return 0
     
     def calculate_proportional_subvention_detailed(self, cursor, project_id, subvention, year, month, projet_info):

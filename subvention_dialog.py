@@ -787,34 +787,74 @@ class SubventionDialog(QDialog):
             
             # 3. Calculer le montant total de la subvention selon le mode
             if subvention_data.get('mode_simplifie', 0):
+                # MODE SIMPLIFIÉ : Répartir temporellement le montant forfaitaire
                 montant_total_subvention = float(subvention_data.get('montant_forfaitaire', 0))
+                
+                if montant_total_subvention <= 0:
+                    return 0
+                
+                # Calculer le nombre total de mois de la période de subvention
+                try:
+                    debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
+                    fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
+                    
+                    total_mois_subvention = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
+                    
+                    # Déterminer combien de mois de la période cible sont dans la période de subvention
+                    if target_month:
+                        # Un seul mois demandé
+                        target_date = datetime.datetime(target_year, target_month, 1)
+                        if debut_subv <= target_date <= fin_subv:
+                            mois_couverts = 1
+                        else:
+                            return 0
+                    else:
+                        # Toute l'année demandée : compter les mois couverts
+                        mois_couverts = 0
+                        for mois in range(1, 13):
+                            mois_date = datetime.datetime(target_year, mois, 1)
+                            if debut_subv <= mois_date <= fin_subv:
+                                mois_couverts += 1
+                        
+                        if mois_couverts == 0:
+                            return 0
+                    
+                    # Répartir proportionnellement au nombre de mois
+                    proportion = mois_couverts / total_mois_subvention
+                    montant_reparti = montant_total_subvention * proportion
+                    
+                    return montant_reparti
+                    
+                except (ValueError, ZeroDivisionError):
+                    return 0
+                
             else:
-                # Mode détaillé : calcul avec coefficients
+                # MODE DÉTAILLÉ : Répartir proportionnellement aux dépenses éligibles
                 montant_total_subvention = SubventionDialog._calculate_detailed_subvention_amount(
                     cursor, project_id, subvention_data
                 )
-            
-            if montant_total_subvention <= 0:
-                return 0
-            
-            # 4. Calculer les dépenses éligibles totales de la subvention
-            depenses_eligibles_totales = SubventionDialog._calculate_total_eligible_expenses(
-                cursor, project_id, subvention_data, date_debut_subv, date_fin_subv
-            )
-            
-            if depenses_eligibles_totales <= 0:
-                return 0
-            
-            # 5. Calculer les dépenses éligibles de la période cible
-            depenses_eligibles_periode = SubventionDialog._calculate_period_eligible_expenses(
-                cursor, project_id, subvention_data, target_year, target_month
-            )
-            
-            # 6. Calculer la proportion et retourner le montant réparti
-            proportion = depenses_eligibles_periode / depenses_eligibles_totales
-            montant_reparti = montant_total_subvention * proportion
-            
-            return montant_reparti
+                
+                if montant_total_subvention <= 0:
+                    return 0
+                
+                # 4. Calculer les dépenses éligibles totales de la subvention
+                depenses_eligibles_totales = SubventionDialog._calculate_total_eligible_expenses(
+                    cursor, project_id, subvention_data, date_debut_subv, date_fin_subv
+                )
+                
+                if depenses_eligibles_totales <= 0:
+                    return 0
+                
+                # 5. Calculer les dépenses éligibles de la période cible
+                depenses_eligibles_periode = SubventionDialog._calculate_period_eligible_expenses(
+                    cursor, project_id, subvention_data, target_year, target_month
+                )
+                
+                # 6. Calculer la proportion et retourner le montant réparti
+                proportion = depenses_eligibles_periode / depenses_eligibles_totales
+                montant_reparti = montant_total_subvention * proportion
+                
+                return montant_reparti
             
         except Exception as e:
             return 0

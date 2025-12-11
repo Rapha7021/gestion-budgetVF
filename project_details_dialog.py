@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QInputDialog, QMessageBox, QTextEdit, QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QInputDialog, QMessageBox, QTextEdit, QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QApplication
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 import sqlite3
 import datetime
@@ -23,290 +23,333 @@ class ProjectDetailsDialog(QDialog):
         self.setWindowTitle('Détails du projet')
         screen = self.screen().geometry()
         self.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+        
+        self.projet_id = projet_id
+        
+        # Cache pour les calculs de subventions (évite de recalculer plusieurs fois)
+        self._subvention_data_cache = {}
+        self._redistribution_cache = {}
+        
+        # Créer le layout principal immédiatement
+        self.main_layout = QVBoxLayout()
+        
+        # Afficher un message de chargement
+        self.loading_label = QLabel("<h2>Chargement des données du projet...</h2>")
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_label.setStyleSheet("padding: 50px;")
+        self.main_layout.addWidget(self.loading_label)
+        
+        self.setLayout(self.main_layout)
+        
+        # Afficher la fenêtre immédiatement
         self.show()
-        main_layout = QVBoxLayout()
-        grid = QGridLayout()
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.code, p.nom, p.details, p.date_debut, p.date_fin, p.livrables, 
-                       c.nom || ' ' || c.prenom || ' - ' || c.direction AS chef_complet, 
-                       p.etat, p.cir, p.subvention, p.theme_principal
-                FROM projets p
-                LEFT JOIN chefs_projet c ON p.chef = c.id
-                WHERE p.id=?
-            ''', (projet_id,))
-            projet = cursor.fetchone()
-            
-            # Thèmes
-            cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (projet_id,))
-            themes = [nom for (nom,) in cursor.fetchall()]
-            # Investissements
-            cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (projet_id,))
-            investissements = cursor.fetchall()
-            # Equipe
-            cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (projet_id,))
-            equipe = cursor.fetchall()
-            # Images
-            cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (projet_id,))
-            images = cursor.fetchall()
-            
-            # Calcul des coûts
-            cursor.execute('''
-                SELECT t.categorie, SUM(t.jours) AS total_jours
-                FROM temps_travail t
-                WHERE t.projet_id = ?
-                GROUP BY t.categorie
-            ''', (projet_id,))
-            categories_jours = cursor.fetchall()
+        
+        # Forcer le traitement des événements pour que la fenêtre s'affiche
+        QApplication.instance().processEvents()
+        
+        # Charger les données après l'affichage
+        QTimer.singleShot(10, self._load_project_data)
 
-            couts = {"charge": 0, "direct": 0, "complet": 0}
-            for categorie, total_jours in categories_jours:
-                code_categorie = _category_code(categorie)
-                if not code_categorie:
-                    continue
-
-                cursor.execute('''
-                    SELECT montant_charge, cout_production, cout_complet
-                    FROM categorie_cout
-                    WHERE categorie = ?
-                ''', (code_categorie,))
-                res = cursor.fetchone()
+    def _load_project_data(self):
+        """Charge les données du projet de manière optimisée"""
+        try:
+            # Supprimer le message de chargement
+            self.loading_label.deleteLater()
+            
+            # Créer un nouveau layout pour le contenu
+            grid = QGridLayout()
+            
+            with get_connection() as conn:
+                cursor = conn.cursor()
                 
-                if res:
-                    montant_charge, cout_production, cout_complet = res
-                    couts["charge"] += (montant_charge or 0) * total_jours
-                    couts["direct"] += (cout_production or 0) * total_jours
-                    couts["complet"] += (cout_complet or 0) * total_jours
+                # OPTIMISATION: Requête unique pour récupérer toutes les infos de base
+                cursor.execute('''
+                    SELECT p.code, p.nom, p.details, p.date_debut, p.date_fin, p.livrables, 
+                           c.nom || ' ' || c.prenom || ' - ' || c.direction AS chef_complet, 
+                           p.etat, p.cir, p.subvention, p.theme_principal
+                    FROM projets p
+                    LEFT JOIN chefs_projet c ON p.chef = c.id
+                    WHERE p.id=?
+                ''', (self.projet_id,))
+                projet = cursor.fetchone()
+                
+                # Récupérer toutes les données liées en parallèle (requêtes groupées)
+                # Thèmes
+                cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
+                themes = [nom for (nom,) in cursor.fetchall()]
+                
+                # Investissements
+                cursor.execute('SELECT montant, date_achat, duree FROM investissements WHERE projet_id=?', (self.projet_id,))
+                investissements = cursor.fetchall()
+                
+                # Equipe
+                cursor.execute('SELECT direction, type, nombre FROM equipe WHERE projet_id=?', (self.projet_id,))
+                equipe = cursor.fetchall()
+                
+                # Images
+                cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (self.projet_id,))
+                images = cursor.fetchall()
+                
+                # OPTIMISATION: Calcul des coûts avec JOIN au lieu de boucle de requêtes
+                cursor.execute('''
+                    SELECT 
+                        SUM((cc.montant_charge * t.jours)) AS total_charge,
+                        SUM((cc.cout_production * t.jours)) AS total_direct,
+                        SUM((cc.cout_complet * t.jours)) AS total_complet
+                    FROM temps_travail t
+                    LEFT JOIN categorie_cout cc ON t.categorie = cc.categorie
+                    WHERE t.projet_id = ?
+                ''', (self.projet_id,))
+                couts_result = cursor.fetchone()
+                
+                couts = {
+                    "charge": couts_result[0] or 0,
+                    "direct": couts_result[1] or 0,
+                    "complet": couts_result[2] or 0
+                }
 
-            # Ajouter les dépenses externes
-            cursor.execute('''
-                SELECT SUM(montant) 
-                FROM depenses 
-                WHERE projet_id = ?
-            ''', (projet_id,))
-            depenses_externes = cursor.fetchone()
-            if depenses_externes and depenses_externes[0]:
-                montant_depenses = float(depenses_externes[0])
-                # Les dépenses externes s'ajoutent à tous les types de coûts
-                couts["charge"] += montant_depenses
-                couts["direct"] += montant_depenses
-                couts["complet"] += montant_depenses
-
-            # Ajouter les autres dépenses
-            cursor.execute('''
-                SELECT SUM(montant) 
-                FROM autres_depenses 
-                WHERE projet_id = ?
-            ''', (projet_id,))
-            autres_depenses = cursor.fetchone()
-            if autres_depenses and autres_depenses[0]:
-                montant_autres = float(autres_depenses[0])
-                # Les autres dépenses s'ajoutent à tous les types de coûts
-                couts["charge"] += montant_autres
-                couts["direct"] += montant_autres
-                couts["complet"] += montant_autres
-                    
-        # Réorganisation de la mise en page avec une structure plus claire
-        # Partie haute avec informations principales
-        top_section = QHBoxLayout()
-        
-        # Colonne gauche - Informations projet
-        left_column = QVBoxLayout()
-        left_column.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
-        left_column.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
-        
-        # Champ détails avec un QTextEdit en lecture seule pour une meilleure gestion du texte long
-        details_container = QVBoxLayout()
-        details_title = QLabel("<b>Détails :</b>")
-        details_container.addWidget(details_title)
-        
-        details_text = QTextEdit()
-        details_text.setPlainText(projet[2] if projet[2] else "Aucun détail")
-        details_text.setReadOnly(True)
-        details_text.setMaximumHeight(100)  # Hauteur fixe mais scrollable
-        details_text.setMaximumWidth(400)   # Largeur légèrement augmentée
-        details_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        details_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        # Style pour que ça ressemble plus à un affichage qu'à un champ d'édition
-        details_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8f8f8;
-                border: 1px solid #ddd;
-                font-family: inherit;
-                font-size: inherit;
-            }
-        """)
-        details_container.addWidget(details_text)
-        left_column.addLayout(details_container)
-        
-        left_column.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
-        left_column.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
-        left_column.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
-        left_column.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
-        if projet[10]:
-            left_column.addWidget(QLabel(f"<b>Thème principal :</b> {projet[10]}"))
-        if themes:
-            left_column.addWidget(QLabel("<b>Thèmes :</b> " + ", ".join(themes)))
-        
-        # Ajouter la section Équipe dans la colonne gauche (en dessous des livrables)
-        equipe_text = "<b>Equipe :</b>\n"
-        if equipe:
-            # Organiser les données d'équipe par direction
-            equipe_par_direction = {}
-            for direction, type_, nombre in equipe:
-                if nombre > 0:  # Ne considérer que les membres avec un nombre > 0
-                    if direction not in equipe_par_direction:
-                        equipe_par_direction[direction] = []
-                    equipe_par_direction[direction].append((type_, nombre))
+                # Ajouter les dépenses externes (une seule requête groupée)
+                cursor.execute('''
+                    SELECT 
+                        COALESCE(SUM(d.montant), 0) AS depenses,
+                        COALESCE(SUM(ad.montant), 0) AS autres_depenses
+                    FROM (SELECT ? AS projet_id) p
+                    LEFT JOIN depenses d ON d.projet_id = p.projet_id
+                    LEFT JOIN autres_depenses ad ON ad.projet_id = p.projet_id
+                ''', (self.projet_id,))
+                depenses_result = cursor.fetchone()
+                
+                montant_depenses = depenses_result[0] or 0
+                montant_autres = depenses_result[1] or 0
+                
+                # Ajouter aux coûts
+                total_depenses = montant_depenses + montant_autres
+                couts["charge"] += total_depenses
+                couts["direct"] += total_depenses
+                couts["complet"] += total_depenses
+                        
+            # Réorganisation de la mise en page avec une structure plus claire
+            # Partie haute avec informations principales
+            top_section = QHBoxLayout()
             
-            # Afficher les équipes par direction
-            if equipe_par_direction:
-                for direction, membres in equipe_par_direction.items():
-                    if membres:  # Ne pas afficher les directions sans membres
-                        equipe_text += f"<b>{direction}</b>:\n"
-                        for type_, nombre in membres:
-                            equipe_text += f"  - {type_}: {nombre}\n"
+            # Colonne gauche - Informations projet
+            left_column = QVBoxLayout()
+            left_column.addWidget(QLabel(f"<b>Code projet :</b> {projet[0]}"))
+            left_column.addWidget(QLabel(f"<b>Nom projet :</b> {projet[1]}"))
+            
+            # Champ détails avec un QTextEdit en lecture seule pour une meilleure gestion du texte long
+            details_container = QVBoxLayout()
+            details_title = QLabel("<b>Détails :</b>")
+            details_container.addWidget(details_title)
+            
+            details_text = QTextEdit()
+            details_text.setPlainText(projet[2] if projet[2] else "Aucun détail")
+            details_text.setReadOnly(True)
+            details_text.setMaximumHeight(100)  # Hauteur fixe mais scrollable
+            details_text.setMaximumWidth(400)   # Largeur légèrement augmentée
+            details_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            details_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            # Style pour que ça ressemble plus à un affichage qu'à un champ d'édition
+            details_text.setStyleSheet("""
+                QTextEdit {
+                    background-color: #f8f8f8;
+                    border: 1px solid #ddd;
+                    font-family: inherit;
+                    font-size: inherit;
+                }
+            """)
+            details_container.addWidget(details_text)
+            left_column.addLayout(details_container)
+            
+            left_column.addWidget(QLabel(f"<b>Date début :</b> {projet[3]}"))
+            left_column.addWidget(QLabel(f"<b>Date fin :</b> {projet[4]}"))
+            left_column.addWidget(QLabel(f"<b>Livrables :</b> {projet[5]}"))
+            left_column.addWidget(QLabel(f"<b>Chef(fe) de projet :</b> {projet[6]}"))
+            if projet[10]:
+                left_column.addWidget(QLabel(f"<b>Thème principal :</b> {projet[10]}"))
+            if themes:
+                left_column.addWidget(QLabel("<b>Thèmes :</b> " + ", ".join(themes)))
+            
+            # Ajouter la section Équipe dans la colonne gauche (en dessous des livrables)
+            equipe_text = "<b>Equipe :</b>\n"
+            if equipe:
+                # Organiser les données d'équipe par direction
+                equipe_par_direction = {}
+                for direction, type_, nombre in equipe:
+                    if nombre > 0:  # Ne considérer que les membres avec un nombre > 0
+                        if direction not in equipe_par_direction:
+                            equipe_par_direction[direction] = []
+                        equipe_par_direction[direction].append((type_, nombre))
+                
+                # Afficher les équipes par direction
+                if equipe_par_direction:
+                    for direction, membres in equipe_par_direction.items():
+                        if membres:  # Ne pas afficher les directions sans membres
+                            equipe_text += f"<b>{direction}</b>:\n"
+                            for type_, nombre in membres:
+                                equipe_text += f"  - {type_}: {nombre}\n"
+                else:
+                    equipe_text += "Aucune info"
             else:
                 equipe_text += "Aucune info"
-        else:
-            equipe_text += "Aucune info"
-        equipe_label = QLabel(equipe_text)
-        equipe_label.setWordWrap(True)  # Activer le retour à la ligne automatique
-        equipe_label.setMaximumWidth(450)  # Élargir la largeur maximum
-        left_column.addWidget(equipe_label)
-        
-        # Colonne centrale - État, CIR, Subvention, Investissements (plus serrés)
-        center_column = QVBoxLayout()
-        center_column.setSpacing(5)  # Réduire l'espacement entre les éléments
-        
-        center_column.addWidget(QLabel(f"<b>Etat :</b> {projet[7]}"))
-        center_column.addWidget(QLabel(f"<b>CIR :</b> {'Oui' if projet[8] else 'Non'}"))
-        center_column.addWidget(QLabel(f"<b>Subvention :</b> {'Oui' if projet[9] else 'Non'}"))
-        
-        # Investissements
-        invest_text = "<b>Investissements :</b>\n"
-        if investissements:
-            for montant, date_achat, duree in investissements:
-                invest_text += f"- {format_montant(montant)} | Achat: {date_achat} | Durée: {duree} ans\n"
-        else:
-            invest_text += "Aucun"
-        invest_label = QLabel(invest_text)
-        invest_label.setMaximumWidth(250)
-        center_column.addWidget(invest_label)
-        
-        # Colonne droite - Budget et subventions
-        self.budget_vbox = QVBoxLayout()
-        self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
-        
-        # Créer les labels avec police monospace pour l'alignement
-        cout_charge_label = QLabel(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
-        cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_charge_label)
-        
-        cout_production_label = QLabel(f"Coût production : {format_montant_aligne(couts['direct'])}")
-        cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_production_label)
-        
-        cout_complet_label = QLabel(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
-        cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
-        self.budget_vbox.addWidget(cout_complet_label)
-        
-        # Ajouter les colonnes au layout horizontal
-        top_section.addLayout(left_column)
-        top_section.addLayout(center_column)
-        top_section.addLayout(self.budget_vbox)
-        
-        # Ajouter la section haute au layout principal
-        main_layout.addLayout(top_section)
-        # Section images
-        img_label = QLabel("<b>Images du projet :</b>")
-        main_layout.addWidget(img_label)
-        img_hbox = QHBoxLayout()
-        for nom, data in images:
-            try:
-                from PyQt6.QtGui import QPixmap
-                pixmap = QPixmap()
-                if pixmap.loadFromData(data):
-                    img_widget = QLabel()
-                    # Augmenter la taille d'affichage et améliorer la qualité
-                    scaled_pixmap = pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                    img_widget.setPixmap(scaled_pixmap)
-                    img_widget.setStyleSheet("border: 2px solid gray; margin: 5px; background-color: white;")
-                    img_widget.setToolTip(f"{nom}\nTaille originale: {pixmap.width()}x{pixmap.height()}")  # Afficher le nom et la taille originale
-                    # Permettre le clic pour voir en taille réelle
-                    img_widget.mousePressEvent = lambda event, p=pixmap, n=nom: self.show_fullsize_image(p, n)
-                    img_widget.setCursor(Qt.CursorShape.PointingHandCursor)
-                    img_hbox.addWidget(img_widget)
-            except Exception as e:
-                # En cas d'erreur, afficher un placeholder
-                error_widget = QLabel(f"Erreur image:\n{nom}")
-                error_widget.setFixedSize(300, 300)
-                error_widget.setStyleSheet("border: 2px solid red; background-color: #ffeeee; color: red;")
-                error_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                img_hbox.addWidget(error_widget)
-        main_layout.addLayout(img_hbox)
+            equipe_label = QLabel(equipe_text)
+            equipe_label.setWordWrap(True)  # Activer le retour à la ligne automatique
+            equipe_label.setMaximumWidth(450)  # Élargir la largeur maximum
+            left_column.addWidget(equipe_label)
+            
+            # Colonne centrale - État, CIR, Subvention, Investissements (plus serrés)
+            center_column = QVBoxLayout()
+            center_column.setSpacing(5)  # Réduire l'espacement entre les éléments
+            
+            center_column.addWidget(QLabel(f"<b>Etat :</b> {projet[7]}"))
+            center_column.addWidget(QLabel(f"<b>CIR :</b> {'Oui' if projet[8] else 'Non'}"))
+            center_column.addWidget(QLabel(f"<b>Subvention :</b> {'Oui' if projet[9] else 'Non'}"))
+            
+            # Investissements
+            invest_text = "<b>Investissements :</b>\n"
+            if investissements:
+                for montant, date_achat, duree in investissements:
+                    invest_text += f"- {format_montant(montant)} | Achat: {date_achat} | Durée: {duree} ans\n"
+            else:
+                invest_text += "Aucun"
+            invest_label = QLabel(invest_text)
+            invest_label.setMaximumWidth(250)
+            center_column.addWidget(invest_label)
+            
+            # Colonne droite - Budget et subventions
+            self.budget_vbox = QVBoxLayout()
+            self.budget_vbox.addWidget(QLabel(f"<b>Budget Total :</b>"))
+            
+            # Créer les labels avec police monospace pour l'alignement
+            cout_charge_label = QLabel(f"Coût chargé     : {format_montant_aligne(couts['charge'])}")
+            cout_charge_label.setStyleSheet("font-family: 'Courier New', monospace;")
+            self.budget_vbox.addWidget(cout_charge_label)
+            
+            cout_production_label = QLabel(f"Coût production : {format_montant_aligne(couts['direct'])}")
+            cout_production_label.setStyleSheet("font-family: 'Courier New', monospace;")
+            self.budget_vbox.addWidget(cout_production_label)
+            
+            cout_complet_label = QLabel(f"Coût complet    : {format_montant_aligne(couts['complet'])}")
+            cout_complet_label.setStyleSheet("font-family: 'Courier New', monospace;")
+            self.budget_vbox.addWidget(cout_complet_label)
+            
+            # Ajouter les colonnes au layout horizontal
+            top_section.addLayout(left_column)
+            top_section.addLayout(center_column)
+            top_section.addLayout(self.budget_vbox)
+            
+            # Ajouter la section haute au layout principal
+            self.main_layout.addLayout(top_section)
+            
+            # Section images
+            img_label = QLabel("<b>Images du projet :</b>")
+            self.main_layout.addWidget(img_label)
+            img_hbox = QHBoxLayout()
+            for nom, data in images:
+                try:
+                    from PyQt6.QtGui import QPixmap
+                    pixmap = QPixmap()
+                    if pixmap.loadFromData(data):
+                        img_widget = QLabel()
+                        # Augmenter la taille d'affichage et améliorer la qualité
+                        scaled_pixmap = pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        img_widget.setPixmap(scaled_pixmap)
+                        img_widget.setStyleSheet("border: 2px solid gray; margin: 5px; background-color: white;")
+                        img_widget.setToolTip(f"{nom}\nTaille originale: {pixmap.width()}x{pixmap.height()}")  # Afficher le nom et la taille originale
+                        # Permettre le clic pour voir en taille réelle
+                        img_widget.mousePressEvent = lambda event, p=pixmap, n=nom: self.show_fullsize_image(p, n)
+                        img_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+                        img_hbox.addWidget(img_widget)
+                except Exception as e:
+                    # En cas d'erreur, afficher un placeholder
+                    error_widget = QLabel(f"Erreur image:\n{nom}")
+                    error_widget.setFixedSize(300, 300)
+                    error_widget.setStyleSheet("border: 2px solid red; background-color: #ffeeee; color: red;")
+                    error_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    img_hbox.addWidget(error_widget)
+            self.main_layout.addLayout(img_hbox)
 
-        # Section actualités
-        actualites_label = QLabel("<b>Actualités du projet :</b>")
-        main_layout.addWidget(actualites_label)
-        self.actualites_list = QListWidget()
-        self.actualites_list.setMaximumHeight(100)  # Hauteur max fixée, ajustable selon besoin
-        main_layout.addWidget(self.actualites_list)
+            # Section actualités
+            actualites_label = QLabel("<b>Actualités du projet :</b>")
+            self.main_layout.addWidget(actualites_label)
+            self.actualites_list = QListWidget()
+            self.actualites_list.setMaximumHeight(100)  # Hauteur max fixée, ajustable selon besoin
+            self.main_layout.addWidget(self.actualites_list)
 
-        # Boutons actualités
-        btn_hbox = QHBoxLayout()
-        add_btn = QPushButton("Ajouter une actualité")
-        edit_btn = QPushButton("Modifier l'actualité sélectionnée")
-        del_btn = QPushButton("Supprimer l'actualité sélectionnée")
-        btn_hbox.addWidget(add_btn)
-        btn_hbox.addWidget(edit_btn)
-        btn_hbox.addWidget(del_btn)
-        # Bouton import Excel
-        import_excel_btn = QPushButton("Importer Excel")
-        btn_hbox.addWidget(import_excel_btn)
-        # Nouveau bouton "Modifier le projet"
-        edit_project_btn = QPushButton("Modifier le projet")
-        btn_hbox.addWidget(edit_project_btn)
-        # Nouveau bouton "Modifier le budget"
-        edit_budget_btn = QPushButton("Modifier le budget")
-        btn_hbox.addWidget(edit_budget_btn)
-        # Ajout du bouton "Gérer les tâches"
-        manage_tasks_btn = QPushButton("Gérer les tâches")
-        btn_hbox.addWidget(manage_tasks_btn)
-        # Ajout du bouton "Compte de résultat global"
-        compte_resultat_btn = QPushButton("Compte de résultat global")
-        btn_hbox.addWidget(compte_resultat_btn)
-        # Ajout du bouton "Imprimer la page"
-        print_page_btn = QPushButton("Imprimer la page")
-        btn_hbox.addWidget(print_page_btn)
-        main_layout.addLayout(btn_hbox)
+            # Boutons actualités
+            btn_hbox = QHBoxLayout()
+            add_btn = QPushButton("Ajouter une actualité")
+            edit_btn = QPushButton("Modifier l'actualité sélectionnée")
+            del_btn = QPushButton("Supprimer l'actualité sélectionnée")
+            btn_hbox.addWidget(add_btn)
+            btn_hbox.addWidget(edit_btn)
+            btn_hbox.addWidget(del_btn)
+            # Bouton import Excel
+            import_excel_btn = QPushButton("Importer Excel")
+            btn_hbox.addWidget(import_excel_btn)
+            # Nouveau bouton "Modifier le projet"
+            edit_project_btn = QPushButton("Modifier le projet")
+            btn_hbox.addWidget(edit_project_btn)
+            # Nouveau bouton "Modifier le budget"
+            edit_budget_btn = QPushButton("Modifier le budget")
+            btn_hbox.addWidget(edit_budget_btn)
+            # Ajout du bouton "Gérer les tâches"
+            manage_tasks_btn = QPushButton("Gérer les tâches")
+            btn_hbox.addWidget(manage_tasks_btn)
+            # Ajout du bouton "Compte de résultat global"
+            compte_resultat_btn = QPushButton("Compte de résultat global")
+            btn_hbox.addWidget(compte_resultat_btn)
+            # Ajout du bouton "Imprimer la page"
+            print_page_btn = QPushButton("Imprimer la page")
+            btn_hbox.addWidget(print_page_btn)
+            self.main_layout.addLayout(btn_hbox)
 
-        self.projet_id = projet_id
-        self.load_actualites()
+            self.load_actualites()
 
-        add_btn.clicked.connect(self.add_actualite)
-        edit_btn.clicked.connect(self.edit_actualite)
-        del_btn.clicked.connect(self.delete_actualite)
-        # Import Excel
-        self.df_long = None
-        import_excel_btn.clicked.connect(self.handle_import_excel)
-        # Connexion du bouton "Modifier le projet"
-        edit_project_btn.clicked.connect(self.edit_project)
-        # Connexion du bouton "Modifier le budget"
-        edit_budget_btn.clicked.connect(self.edit_budget)
-        # Connexion du bouton "Gérer les tâches"
-        manage_tasks_btn.clicked.connect(self.open_task_manager)
-        # Connexion du bouton "Compte de résultat global"
-        compte_resultat_btn.clicked.connect(self.open_compte_resultat)
-        # Connexion du bouton "Imprimer la page"
-        print_page_btn.clicked.connect(self.print_page)
+            add_btn.clicked.connect(self.add_actualite)
+            edit_btn.clicked.connect(self.edit_actualite)
+            del_btn.clicked.connect(self.delete_actualite)
+            # Import Excel
+            self.df_long = None
+            import_excel_btn.clicked.connect(self.handle_import_excel)
+            # Connexion du bouton "Modifier le projet"
+            edit_project_btn.clicked.connect(self.edit_project)
+            # Connexion du bouton "Modifier le budget"
+            edit_budget_btn.clicked.connect(self.edit_budget)
+            # Connexion du bouton "Gérer les tâches"
+            manage_tasks_btn.clicked.connect(self.open_task_manager)
+            # Connexion du bouton "Compte de résultat global"
+            compte_resultat_btn.clicked.connect(self.open_compte_resultat)
+            # Connexion du bouton "Imprimer la page"
+            print_page_btn.clicked.connect(self.print_page)
 
-        # Espace vide en dessous
-        main_layout.addStretch()
-        self.setLayout(main_layout)
+            # Espace vide en dessous
+            self.main_layout.addStretch()
 
-        self.refresh_budget()  # Recalcul initial des coûts
+            # Charger les subventions de manière différée (après l'affichage principal)
+            QTimer.singleShot(50, lambda: self._load_subventions_data())
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur de chargement", f"Erreur lors du chargement des données:\n{str(e)}")
+            self.close()
+
+    def _load_subventions_data(self):
+        """Charge les données de subventions de manière différée"""
+        try:
+            # Charger les subventions (sans recalculer le budget déjà fait)
+            self.refresh_subventions()
+            
+            # Afficher le CIR même s'il n'y a pas de subventions
+            if self.has_cir_activated():
+                with get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT COUNT(*) FROM subventions WHERE projet_id = ?', (self.projet_id,))
+                    has_subventions = cursor.fetchone()[0] > 0
+                
+                if not has_subventions:
+                    self.refresh_cir(0)
+        except Exception as e:
+            QMessageBox.warning(self, "Avertissement", f"Erreur lors du chargement des subventions:\n{str(e)}")
 
     def show_fullsize_image(self, pixmap, nom):
         """Affiche une image en taille réelle dans une nouvelle fenêtre"""
@@ -565,7 +608,16 @@ class ProjectDetailsDialog(QDialog):
 
     def get_project_data_for_subventions(self, date_debut_subv=None, date_fin_subv=None):
         """Récupère les données du projet pour calculer les subventions AVEC REDISTRIBUTION AUTOMATIQUE
-        Si les dates de subvention sont fournies, calcule sur cette période, sinon sur tout le projet"""
+        Si les dates de subvention sont fournies, calcule sur cette période, sinon sur tout le projet
+        OPTIMISÉ avec mise en cache"""
+        
+        # Créer une clé de cache basée sur les dates
+        cache_key = f"{date_debut_subv}_{date_fin_subv}"
+        
+        # Vérifier si les données sont déjà en cache
+        if cache_key in self._subvention_data_cache:
+            return self._subvention_data_cache[cache_key]
+        
         conn = get_connection()
         cursor = conn.cursor()
         
@@ -838,6 +890,10 @@ class ProjectDetailsDialog(QDialog):
         data['amortissements'] = amortissements
         
         conn.close()
+        
+        # Mettre en cache le résultat pour éviter de recalculer
+        self._subvention_data_cache[cache_key] = data
+        
         return data
 
     def refresh_cir(self, total_subventions):
@@ -1146,66 +1202,45 @@ class ProjectDetailsDialog(QDialog):
             return total_subventions
 
     def refresh_budget(self):
-        """Recalcule et met à jour les coûts du budget."""
+        """Recalcule et met à jour les coûts du budget (version optimisée)."""
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Recalcul des coûts
+            
+            # OPTIMISATION: Calcul des coûts avec JOIN au lieu de boucle de requêtes
             cursor.execute('''
-                SELECT t.categorie, SUM(t.jours) AS total_jours
+                SELECT 
+                    SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
+                    SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
+                    SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet,
+                    COUNT(CASE WHEN cc.categorie IS NULL THEN 1 END) AS missing_count
                 FROM temps_travail t
+                LEFT JOIN categorie_cout cc ON t.categorie = cc.categorie
                 WHERE t.projet_id = ?
-                GROUP BY t.categorie
             ''', (self.projet_id,))
-            categories_jours = cursor.fetchall()
+            couts_result = cursor.fetchone()
+            
+            couts = {
+                "charge": couts_result[0] or 0,
+                "direct": couts_result[1] or 0,
+                "complet": couts_result[2] or 0
+            }
+            missing_data = (couts_result[3] or 0) > 0
 
-            couts = {"charge": 0, "direct": 0, "complet": 0}
-            missing_data = False
-            for categorie, total_jours in categories_jours:
-                code_categorie = _category_code(categorie)
-                if not code_categorie:
-                    continue
-                cursor.execute('''
-                    SELECT montant_charge, cout_production, cout_complet
-                    FROM categorie_cout
-                    WHERE categorie = ?
-                ''', (code_categorie,))
-                res = cursor.fetchone()
-
-                if res:
-                    montant_charge, cout_production, cout_complet = res
-                    couts["charge"] += (montant_charge or 0) * total_jours
-                    couts["direct"] += (cout_production or 0) * total_jours
-                    couts["complet"] += (cout_complet or 0) * total_jours
-                else:
-                    missing_data = True
-
-            # Ajouter les dépenses externes
+            # Ajouter les dépenses (requête groupée)
             cursor.execute('''
-                SELECT SUM(montant) 
-                FROM depenses 
-                WHERE projet_id = ?
+                SELECT 
+                    COALESCE(SUM(d.montant), 0) AS depenses,
+                    COALESCE(SUM(ad.montant), 0) AS autres_depenses
+                FROM (SELECT ? AS projet_id) p
+                LEFT JOIN depenses d ON d.projet_id = p.projet_id
+                LEFT JOIN autres_depenses ad ON ad.projet_id = p.projet_id
             ''', (self.projet_id,))
-            depenses_externes = cursor.fetchone()
-            if depenses_externes and depenses_externes[0]:
-                montant_depenses = float(depenses_externes[0])
-                # Les dépenses externes s'ajoutent à tous les types de coûts
-                couts["charge"] += montant_depenses
-                couts["direct"] += montant_depenses
-                couts["complet"] += montant_depenses
-
-            # Ajouter les autres dépenses
-            cursor.execute('''
-                SELECT SUM(montant) 
-                FROM autres_depenses 
-                WHERE projet_id = ?
-            ''', (self.projet_id,))
-            autres_depenses = cursor.fetchone()
-            if autres_depenses and autres_depenses[0]:
-                montant_autres = float(autres_depenses[0])
-                # Les autres dépenses s'ajoutent à tous les types de coûts
-                couts["charge"] += montant_autres
-                couts["direct"] += montant_autres
-                couts["complet"] += montant_autres
+            depenses_result = cursor.fetchone()
+            
+            total_depenses = (depenses_result[0] or 0) + (depenses_result[1] or 0)
+            couts["charge"] += total_depenses
+            couts["direct"] += total_depenses
+            couts["complet"] += total_depenses
 
             # Mise à jour des labels avec alignement
             cout_charge_label = self.budget_vbox.itemAt(1).widget()
@@ -1228,15 +1263,10 @@ class ProjectDetailsDialog(QDialog):
             
             # Afficher le CIR même s'il n'y a pas de subventions
             if self.has_cir_activated():
-                # Vérifier si refresh_cir n'a pas déjà été appelé dans refresh_subventions
-                has_subventions = False
-                with get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT COUNT(*) FROM subventions WHERE projet_id = ?', (self.projet_id,))
-                    has_subventions = cursor.fetchone()[0] > 0
+                cursor.execute('SELECT COUNT(*) FROM subventions WHERE projet_id = ?', (self.projet_id,))
+                has_subventions = cursor.fetchone()[0] > 0
                 
                 if not has_subventions:
-                    # Pas de subventions, mais CIR activé : afficher le CIR avec total_subventions = 0
                     self.refresh_cir(0)
 
     def refresh_subventions(self):
@@ -1480,7 +1510,16 @@ class ProjectDetailsDialog(QDialog):
             )
 
     def calculate_period_eligible_expenses_with_redistribution(self, cursor, project_id, subvention_data, year, month):
-        """Calcule les dépenses éligibles pour une période donnée avec redistribution SIMPLIFIÉE"""
+        """Calcule les dépenses éligibles pour une période donnée avec redistribution SIMPLIFIÉE
+        OPTIMISÉ avec mise en cache"""
+        
+        # Créer une clé de cache
+        cache_key = f"{year}_{month}_{subvention_data.get('date_debut_subvention')}_{subvention_data.get('date_fin_subvention')}"
+        
+        # Vérifier si le résultat est déjà en cache
+        if cache_key in self._redistribution_cache:
+            return self._redistribution_cache[cache_key]
+        
         # Utiliser la même logique que SubventionDialog : récupérer les données totales et redistribuer
         
         # Récupérer les dates de subvention et utiliser get_project_data_for_subventions avec ces dates
@@ -1555,20 +1594,28 @@ class ProjectDetailsDialog(QDialog):
                 total_mois_subv = (fin_subv.year - debut_subv.year) * 12 + (fin_subv.month - debut_subv.month) + 1
                 
                 # Retourner la part proportionnelle de l'assiette pour cette année
-                return assiette_totale * (mois_annee_dans_subv / total_mois_subv)
+                result = assiette_totale * (mois_annee_dans_subv / total_mois_subv)
+                self._redistribution_cache[cache_key] = result
+                return result
                 
             except ValueError:
-                return assiette_totale  # En cas d'erreur, retourner l'assiette totale
+                result = assiette_totale  # En cas d'erreur, retourner l'assiette totale
+                self._redistribution_cache[cache_key] = result
+                return result
         
         # Si on demande pour un mois spécifique, vérifier s'il est dans la période de subvention
         try:
             mois_demande = datetime.datetime(year, month, 1)
             if debut_subv <= mois_demande <= fin_subv:
                 # Redistribuer l'assiette sur la durée de la subvention
-                return assiette_totale / duree_subv_mois
+                result = assiette_totale / duree_subv_mois
+                self._redistribution_cache[cache_key] = result
+                return result
             else:
+                self._redistribution_cache[cache_key] = 0
                 return 0
         except ValueError:
+            self._redistribution_cache[cache_key] = 0
             return 0
 
     def calculate_temps_travail_for_period_with_redistribution(self, cursor, project_id, year, month):

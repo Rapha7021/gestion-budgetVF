@@ -109,7 +109,7 @@ class CategorieCoutDialog(QDialog):
 
         self.table.cellChanged.connect(self.mark_dirty)
         self.table.cellChanged.connect(self.validate_category_code)
-        self.table.cellChanged.connect(self.auto_save)  # Sauvegarde automatique
+        # self.table.cellChanged.connect(self.auto_save)  # Sauvegarde automatique désactivée
         self.table.installEventFilter(self)
 
         self.setLayout(main_layout)
@@ -562,6 +562,8 @@ class CategorieCoutDialog(QDialog):
                 self._dirty = False
                 event.accept()
             elif reply == QMessageBox.StandardButton.No:
+                # Recharger les données originales pour annuler les modifications
+                self.brouillons.clear()
                 self._dirty = False
                 event.accept()
             else:
