@@ -326,15 +326,15 @@ class ProjectDetailsDialog(QDialog):
             # Espace vide en dessous
             self.main_layout.addStretch()
 
-            # Charger les subventions de manière différée (après l'affichage principal)
-            QTimer.singleShot(50, lambda: self._load_subventions_data())
+            # Charger les subventions directement
+            self._load_subventions_data()
             
         except Exception as e:
             QMessageBox.critical(self, "Erreur de chargement", f"Erreur lors du chargement des données:\n{str(e)}")
             self.close()
 
     def _load_subventions_data(self):
-        """Charge les données de subventions de manière différée"""
+        """Charge les données de subventions"""
         try:
             # Charger les subventions (sans recalculer le budget déjà fait)
             self.refresh_subventions()
