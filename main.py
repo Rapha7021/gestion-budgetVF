@@ -331,7 +331,8 @@ class MainWindow(QWidget):
 
     def open_import_export_dialog(self):
         from import_export_dialog import ImportExportDialog
-        dialog = Impo
+        dialog = ImportExportDialog(self)
+        dialog.exec()
     
     def recalculate_all_data(self):
         """Recalcule toutes les valeurs dérivées de la base de données"""
