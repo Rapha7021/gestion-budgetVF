@@ -2,10 +2,22 @@ import sqlite3
 import datetime
 from contextlib import contextmanager
 from pathlib import Path
+import sys
+import os
 
 # Nom du fichier de base de données stocké à la racine du projet
 DB_FILENAME = "gestion_budget.db"
-DB_FILE = Path(__file__).resolve().with_name(DB_FILENAME)
+
+# Déterminer le chemin correct selon si on est en .exe ou en développement
+if getattr(sys, 'frozen', False):
+    # L'application est empaquetée avec PyInstaller
+    # sys.executable pointe vers le .exe, on veut le dossier qui le contient
+    application_path = Path(sys.executable).parent
+else:
+    # L'application est lancée normalement (développement)
+    application_path = Path(__file__).resolve().parent
+
+DB_FILE = application_path / DB_FILENAME
 # Export d'une version chaîne utilisée par l'UI ou les boîtes de dialogue
 DB_PATH = str(DB_FILE)
 
