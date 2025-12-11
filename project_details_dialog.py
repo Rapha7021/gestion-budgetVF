@@ -284,9 +284,6 @@ class ProjectDetailsDialog(QDialog):
             btn_hbox.addWidget(add_btn)
             btn_hbox.addWidget(edit_btn)
             btn_hbox.addWidget(del_btn)
-            # Bouton import Excel
-            import_excel_btn = QPushButton("Importer Excel")
-            btn_hbox.addWidget(import_excel_btn)
             # Nouveau bouton "Modifier le projet"
             edit_project_btn = QPushButton("Modifier le projet")
             btn_hbox.addWidget(edit_project_btn)
@@ -309,9 +306,6 @@ class ProjectDetailsDialog(QDialog):
             add_btn.clicked.connect(self.add_actualite)
             edit_btn.clicked.connect(self.edit_actualite)
             del_btn.clicked.connect(self.delete_actualite)
-            # Import Excel
-            self.df_long = None
-            import_excel_btn.clicked.connect(self.handle_import_excel)
             # Connexion du bouton "Modifier le projet"
             edit_project_btn.clicked.connect(self.edit_project)
             # Connexion du bouton "Modifier le budget"
@@ -398,25 +392,6 @@ class ProjectDetailsDialog(QDialog):
         )
         
         dialog.exec()
-
-    def handle_import_excel(self):
-        """Ouvre l'interface d'import Excel configurable avec le projet pré-sélectionné"""
-        try:
-            from excel_import import open_excel_import_dialog
-            open_excel_import_dialog(self, self.projet_id)
-            # Actualiser les coûts et subventions après import Excel
-            self.refresh_budget()
-        except ImportError as e:
-            QMessageBox.critical(
-                self, "Erreur", 
-                f"Impossible de charger le module d'import Excel:\n{str(e)}\n\n"
-                "Assurez-vous que pandas est installé et que le fichier excel_import.py est présent."
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Erreur", 
-                f"Erreur lors de l'ouverture de l'import Excel:\n{str(e)}"
-            )
 
     def load_actualites(self):
         self.actualites_list.clear()

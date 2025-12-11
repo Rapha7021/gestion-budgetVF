@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem,
-    QComboBox, QHBoxLayout, QStackedWidget, QWidget, QMessageBox
+    QComboBox, QHBoxLayout, QStackedWidget, QWidget, QMessageBox, QFileDialog
 )
 from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtCore import Qt
@@ -339,11 +339,32 @@ class BudgetEditDialog(QDialog):
         self.btn_autres_depenses.clicked.connect(lambda: (self.stacked.setCurrentIndex(3), self.update_button_styles(3)))
         self.update_button_styles(0)
 
+        # --- Boutons Import/Export Excel ---
+        excel_layout = QHBoxLayout()
+        self.btn_generer_modele = QPushButton("📄 Générer Modèle Excel")
+        self.btn_generer_modele.setToolTip(
+            "Générer un fichier Excel modèle avec listes déroulantes\n"
+            "pour saisir manuellement les données du projet"
+        )
+        self.btn_generer_modele.clicked.connect(self.generer_modele_excel)
+        
+        self.btn_importer_modele = QPushButton("📥 Importer Données Excel")
+        self.btn_importer_modele.setToolTip(
+            "Importer les données depuis un fichier Excel modèle\n"
+            "contenant : Temps de travail, Dépenses, Recettes"
+        )
+        self.btn_importer_modele.clicked.connect(self.importer_modele_excel)
+        
+        excel_layout.addWidget(self.btn_generer_modele)
+        excel_layout.addWidget(self.btn_importer_modele)
+        excel_layout.addStretch()
+        
         # --- Regroupe année + boutons ---
         top_layout = QHBoxLayout()
         top_layout.addLayout(annee_layout)
         top_layout.addLayout(btn_layout)
         main_layout.addLayout(top_layout)
+        main_layout.addLayout(excel_layout)
 
         # --- QStackedWidget pour les panneaux ---
         self.stacked = QStackedWidget()
@@ -1380,6 +1401,65 @@ class BudgetEditDialog(QDialog):
                     return
             event.accept()
         self.closeEvent = closeEvent
+
+    def generer_modele_excel(self):
+        """Génère un fichier Excel modèle pour saisie manuelle"""
+        from generer_modele_excel import creer_modele_excel
+        
+        # Récupérer le code du projet pour le nom de fichier
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT code FROM projets WHERE id = ?", (self.projet_id,))
+        result = cursor.fetchone()
+        conn.close()
+        
+        code_projet = result[0] if result else "Projet"
+        nom_defaut = f"Modele_{code_projet}.xlsx"
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Enregistrer le modèle Excel",
+            nom_defaut,
+            "Fichiers Excel (*.xlsx)"
+        )
+        
+        if file_path:
+            try:
+                creer_modele_excel(file_path, projet_id=self.projet_id)
+                
+                message = f"Le modèle Excel a été créé avec succès :\n{file_path}\n\n"
+                message += "✓ Le modèle contient des listes déroulantes pour :\n"
+                message += "  • Directions de l'équipe\n"
+                message += "  • Catégories de l'équipe\n"
+                message += "  • Membres de l'équipe\n"
+                message += "  • Mois de la période du projet\n\n"
+                message += "Vous pouvez maintenant :\n"
+                message += "1. Ouvrir le fichier Excel\n"
+                message += "2. Remplir les données avec les listes déroulantes\n"
+                message += "3. Utiliser 'Importer Données Excel' pour l'importer"
+                
+                QMessageBox.information(self, "Modèle créé", message)
+            except Exception as e:
+                QMessageBox.critical(self, "Erreur", f"Erreur lors de la création du modèle :\n{e}")
+    
+    def importer_modele_excel(self):
+        """Ouvre le dialogue d'import depuis un modèle Excel"""
+        from import_modele_excel_dialog import ImportExcelModeleDialog
+        
+        dialog = ImportExcelModeleDialog(self, projet_id=self.projet_id)
+        dialog.exec()
+        
+        # Rafraîchir l'affichage après fermeture du dialog
+        self.refresh_all_data()
+    
+    def refresh_all_data(self):
+        """Rafraîchit toutes les données affichées"""
+        current_year = self.annee_combo.currentText()
+        
+        # Forcer le rechargement en émettant le signal de changement d'année
+        if current_year:
+            # Émettre le signal manuellement pour forcer le rechargement
+            self.annee_combo.currentTextChanged.emit(current_year)
 
     def save_table_to_memory(self, year):
         """Sauvegarde les valeurs du tableau en mémoire pour l'année donnée"""
