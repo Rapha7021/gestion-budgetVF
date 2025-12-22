@@ -30,6 +30,9 @@ class ProjectDetailsDialog(QDialog):
         self._subvention_data_cache = {}
         self._redistribution_cache = {}
         
+        # Flag pour éviter les double-chargements simultanés
+        self._is_loading = False
+        
         # Créer le layout principal immédiatement
         self.main_layout = QVBoxLayout()
         
@@ -50,11 +53,51 @@ class ProjectDetailsDialog(QDialog):
         # Charger les données après l'affichage
         QTimer.singleShot(10, self._load_project_data)
 
+    def _clear_layout(self, layout):
+        """Vide récursivement un layout de tous ses widgets et sous-layouts"""
+        if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                else:
+                    sub_layout = item.layout()
+                    if sub_layout is not None:
+                        self._clear_layout(sub_layout)
+
     def _load_project_data(self):
         """Charge les données du projet de manière optimisée"""
+        # Éviter les double-chargements simultanés
+        if self._is_loading:
+            return
+        
+        self._is_loading = True
+        
+        # Masquer le contenu pendant le rechargement pour éviter l'effet de doublon visuel
+        self.setUpdatesEnabled(False)
+        
         try:
-            # Supprimer le message de chargement
-            self.loading_label.deleteLater()
+            # Supprimer le message de chargement s'il existe encore (premier chargement)
+            if hasattr(self, 'loading_label') and self.loading_label is not None:
+                try:
+                    self.loading_label.deleteLater()
+                    self.loading_label = None
+                except RuntimeError:
+                    # Le widget a déjà été supprimé
+                    pass
+            
+            # Nettoyer le layout existant si c'est un rechargement
+            while self.main_layout.count():
+                item = self.main_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+                elif item.layout():
+                    # Supprimer récursivement les sous-layouts
+                    self._clear_layout(item.layout())
+            
+            # Forcer le traitement des événements pour terminer les suppressions
+            QApplication.instance().processEvents()
             
             # Créer un nouveau layout pour le contenu
             grid = QGridLayout()
@@ -91,43 +134,106 @@ class ProjectDetailsDialog(QDialog):
                 images = cursor.fetchall()
                 
                 # OPTIMISATION: Calcul des coûts avec JOIN au lieu de boucle de requêtes
-                cursor.execute('''
-                    SELECT 
-                        SUM((cc.montant_charge * t.jours)) AS total_charge,
-                        SUM((cc.cout_production * t.jours)) AS total_direct,
-                        SUM((cc.cout_complet * t.jours)) AS total_complet
-                    FROM temps_travail t
-                    LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
-                    WHERE t.projet_id = ?
-                ''', (self.projet_id,))
-                couts_result = cursor.fetchone()
+                # Récupérer les dates du projet pour filtrer
+                cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+                dates_projet = cursor.fetchone()
+                date_debut_str = dates_projet[0] if dates_projet else None
+                date_fin_str = dates_projet[1] if dates_projet else None
                 
-                couts = {
-                    "charge": couts_result[0] or 0,
-                    "direct": couts_result[1] or 0,
-                    "complet": couts_result[2] or 0
-                }
-
-                # Ajouter les dépenses externes (une seule requête groupée)
-                cursor.execute('''
-                    SELECT 
-                        COALESCE(SUM(d.montant), 0) AS depenses,
-                        COALESCE(SUM(ad.montant), 0) AS autres_depenses
-                    FROM (SELECT ? AS projet_id) p
-                    LEFT JOIN depenses d ON d.projet_id = p.projet_id
-                    LEFT JOIN autres_depenses ad ON ad.projet_id = p.projet_id
-                ''', (self.projet_id,))
-                depenses_result = cursor.fetchone()
-                
-                montant_depenses = depenses_result[0] or 0
-                montant_autres = depenses_result[1] or 0
-                
-                # Ajouter aux coûts
-                total_depenses = montant_depenses + montant_autres
-                couts["charge"] += total_depenses
-                couts["direct"] += total_depenses
-                couts["complet"] += total_depenses
+                # Construire la requête avec filtre sur les dates si disponibles
+                if date_debut_str and date_fin_str:
+                    try:
+                        import datetime
+                        debut_projet = datetime.datetime.strptime(date_debut_str, '%m/%Y')
+                        fin_projet = datetime.datetime.strptime(date_fin_str, '%m/%Y')
                         
+                        # Calculer les coûts en filtrant par période (comme compte_resultat_display)
+                        couts = self._calculate_costs_for_period(cursor, self.projet_id, debut_projet, fin_projet)
+                        
+                        # Ajouter dépenses filtrées par période (2 requêtes séparées pour éviter produit cartésien)
+                        annee_debut = debut_projet.year
+                        annee_fin = fin_projet.year
+                        
+                        # Dépenses externes
+                        cursor.execute('''
+                            SELECT COALESCE(SUM(montant), 0)
+                            FROM depenses
+                            WHERE projet_id = ? AND annee >= ? AND annee <= ?
+                        ''', (self.projet_id, annee_debut, annee_fin))
+                        depenses = cursor.fetchone()[0] or 0
+                        
+                        # Autres dépenses
+                        cursor.execute('''
+                            SELECT COALESCE(SUM(montant), 0)
+                            FROM autres_depenses
+                            WHERE projet_id = ? AND annee >= ? AND annee <= ?
+                        ''', (self.projet_id, annee_debut, annee_fin))
+                        autres_depenses = cursor.fetchone()[0] or 0
+                        
+                        total_depenses = depenses + autres_depenses
+                        couts["charge"] += total_depenses
+                        couts["direct"] += total_depenses
+                        couts["complet"] += total_depenses
+                    except:
+                        # Si erreur de parsing des dates, utiliser la requête sans filtre
+                        cursor.execute('''
+                            SELECT 
+                                SUM((cc.montant_charge * t.jours)) AS total_charge,
+                                SUM((cc.cout_production * t.jours)) AS total_direct,
+                                SUM((cc.cout_complet * t.jours)) AS total_complet
+                            FROM temps_travail t
+                            LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                            WHERE t.projet_id = ?
+                        ''', (self.projet_id,))
+                        couts_result = cursor.fetchone()
+                        couts = {
+                            "charge": couts_result[0] or 0,
+                            "direct": couts_result[1] or 0,
+                            "complet": couts_result[2] or 0
+                        }
+                        
+                        # Ajouter dépenses sans filtre (2 requêtes séparées)
+                        cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+                        depenses = cursor.fetchone()[0] or 0
+                        
+                        cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+                        autres_depenses = cursor.fetchone()[0] or 0
+                        
+                        total_depenses = depenses + autres_depenses
+                        couts["charge"] += total_depenses
+                        couts["direct"] += total_depenses
+                        couts["complet"] += total_depenses
+                else:
+                    # Pas de dates - calculer sans filtre
+                    cursor.execute('''
+                        SELECT 
+                            SUM((cc.montant_charge * t.jours)) AS total_charge,
+                            SUM((cc.cout_production * t.jours)) AS total_direct,
+                            SUM((cc.cout_complet * t.jours)) AS total_complet
+                        FROM temps_travail t
+                        LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                        WHERE t.projet_id = ?
+                    ''', (self.projet_id,))
+                    couts_result = cursor.fetchone()
+                    
+                    couts = {
+                        "charge": couts_result[0] or 0,
+                        "direct": couts_result[1] or 0,
+                        "complet": couts_result[2] or 0
+                    }
+                    
+                    # Ajouter dépenses sans filtre (2 requêtes séparées)
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+                    depenses = cursor.fetchone()[0] or 0
+                    
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+                    autres_depenses = cursor.fetchone()[0] or 0
+                    
+                    total_depenses = depenses + autres_depenses
+                    couts["charge"] += total_depenses
+                    couts["direct"] += total_depenses
+                    couts["complet"] += total_depenses
+                
             # Réorganisation de la mise en page avec une structure plus claire
             # Partie haute avec informations principales
             top_section = QHBoxLayout()
@@ -326,6 +432,10 @@ class ProjectDetailsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Erreur de chargement", f"Erreur lors du chargement des données:\n{str(e)}")
             self.close()
+        finally:
+            # Réactiver les mises à jour visuelles
+            self.setUpdatesEnabled(True)
+            self._is_loading = False
 
     def _load_subventions_data(self):
         """Charge les données de subventions"""
@@ -484,12 +594,18 @@ class ProjectDetailsDialog(QDialog):
             # Créer et ouvrir le formulaire de modification
             form = ProjectForm(self, self.projet_id)
             if form.exec():
-                # Si le projet a été modifié, rafraîchir les données de cette page
-                self.refresh_project_data()  # Rafraîchir les données de cette page
-                
-                # Également rafraîchir la liste des projets de la fenêtre principale
-                if hasattr(self.parent(), 'load_projects'):
-                    self.parent().load_projects()
+                # Afficher un indicateur de chargement
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    # Si le projet a été modifié, recharger toutes les données
+                    # Au lieu de fermer/rouvrir, on recharge directement
+                    self._load_project_data()
+                    
+                    # Également rafraîchir la liste des projets de la fenêtre principale
+                    if hasattr(self.parent(), 'load_projects'):
+                        self.parent().load_projects()
+                finally:
+                    QApplication.restoreOverrideCursor()
                     
         except ImportError as e:
             QMessageBox.critical(
@@ -506,16 +622,26 @@ class ProjectDetailsDialog(QDialog):
     def edit_budget(self):
         from budget_edit_dialog import BudgetEditDialog
         dlg = BudgetEditDialog(self.projet_id, self)
-        dlg.exec()
-        # Actualiser les coûts et subventions après modification du budget
-        self.refresh_budget()
+        if dlg.exec():
+            # Afficher un indicateur de chargement
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                # Actualiser les coûts et subventions après modification du budget
+                self.refresh_budget()
+            finally:
+                QApplication.restoreOverrideCursor()
 
     def open_task_manager(self):
         from task_manager_dialog import TaskManagerDialog
         dlg = TaskManagerDialog(self, self.projet_id)
-        dlg.exec()
-        # Actualiser les coûts et subventions après gestion des tâches
-        self.refresh_budget()
+        if dlg.exec():
+            # Afficher un indicateur de chargement
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                # Actualiser les coûts et subventions après gestion des tâches
+                self.refresh_budget()
+            finally:
+                QApplication.restoreOverrideCursor()
 
     def open_compte_resultat(self):
         """Ouvre le compte de résultat pour ce projet spécifique"""
@@ -890,126 +1016,75 @@ class ProjectDetailsDialog(QDialog):
             except ValueError:
                 return
 
-            # Récupérer les coefficients CIR (utiliser la première année disponible)
-            k1, k2, k3 = None, None, None
-            for year in range(debut_projet.year, fin_projet.year + 1):
-                cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (year,))
-                cir_coeffs = cursor.fetchone()
-                if cir_coeffs and all(coeff is not None for coeff in cir_coeffs):
-                    k1, k2, k3 = cir_coeffs
-                    break
-
-            if not all(coeff is not None for coeff in [k1, k2, k3]):
-                # Pas de coefficients CIR trouvés
-                return
-
-            # Calculer le CIR mois par mois avec la bonne répartition des subventions
-            montant_net_eligible_total = 0
+# UTILISER EXACTEMENT LA MÊME MÉTHODE QUE LE COMPTE DE RÉSULTAT
+            # Calcul année par année avec les coefficients de chaque année
             cir_total = 0
+            montant_net_eligible_total = 0
             
-            # Récupérer toutes les subventions pour ce projet
-            try:
-                cursor.execute('''
-                    SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
-                           depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
-                           depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux,
-                           date_debut_subvention, date_fin_subvention, montant_subvention_max, depenses_eligibles_max
-                    FROM subventions 
-                    WHERE projet_id = ?
-                ''', (self.projet_id,))
-                subventions = cursor.fetchall()
-            except sqlite3.OperationalError:
-                # Fallback pour les anciennes bases de données
-                try:
-                    cursor.execute('''
-                        SELECT nom, mode_simplifie, montant_forfaitaire, depenses_temps_travail, coef_temps_travail, 
-                               depenses_externes, coef_externes, depenses_autres_achats, coef_autres_achats, 
-                               depenses_dotation_amortissements, coef_dotation_amortissements, cd, taux
-                        FROM subventions 
-                        WHERE projet_id = ?
-                    ''', (self.projet_id,))
-                    # Ajouter des valeurs par défaut pour les colonnes manquantes
-                    subventions = [list(row) + [None, None, 0, 0] for row in cursor.fetchall()]
-                except sqlite3.OperationalError:
-                    subventions = []
-
-            # Préparer les données des subventions
-            subventions_data = []
-            if subventions:
-                from subvention_dialog import SubventionDialog
-                
-                for subv in subventions:
-                    (nom, mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, 
-                     dep_autres, coef_autres, dep_amort, coef_amort, cd, taux, 
-                     date_debut_subv, date_fin_subv, montant_max, depenses_max) = subv
-                    
-                    subvention_data = {
-                        'nom': nom,
-                        'mode_simplifie': mode_simplifie or 0,
-                        'montant_forfaitaire': montant_forfaitaire or 0,
-                        'depenses_temps_travail': dep_temps or 0,
-                        'coef_temps_travail': coef_temps or 1,
-                        'depenses_externes': dep_ext or 0,
-                        'coef_externes': coef_ext or 1,
-                        'depenses_autres_achats': dep_autres or 0,
-                        'coef_autres_achats': coef_autres or 1,
-                        'depenses_dotation_amortissements': dep_amort or 0,
-                        'coef_dotation_amortissements': coef_amort or 1,
-                        'cd': cd or 1,
-                        'taux': taux or 100,
-                        'date_debut_subvention': date_debut_subv,
-                        'date_fin_subvention': date_fin_subv,
-                        'montant_subvention_max': montant_max or 0,
-                        'depenses_eligibles_max': depenses_max or 0
-                    }
-                    subventions_data.append(subvention_data)
-            
-            # UTILISER EXACTEMENT LA MÊME LOGIQUE QUE LE COMPTE DE RÉSULTAT
-            # Importer la classe CompteResultatDisplay pour utiliser ses méthodes
+            # Importer la classe CompteResultatDisplay pour utiliser EXACTEMENT ses méthodes
             from compte_resultat_display import CompteResultatDisplay
             temp_compte_resultat = CompteResultatDisplay(self, {
                 'project_ids': [self.projet_id], 
                 'years': list(range(debut_projet.year, fin_projet.year + 1)),
-                'period_type': 'monthly',
-                'granularity': 'monthly',
+                'period_type': 'yearly',
+                'granularity': 'yearly',
                 'cost_type': 'montant_charge'
             })
             
-            # Calculer le CIR mois par mois en utilisant EXACTEMENT la même méthode que le compte de résultat
-            current_date = debut_projet
-            while current_date <= fin_projet:
-                year = current_date.year
-                month = current_date.month
+            # Calculer le CIR année par année (chaque année utilise ses propres coefficients)
+            for year in range(debut_projet.year, fin_projet.year + 1):
+                # Utiliser EXACTEMENT la même méthode que le compte de résultat
+                cir_annuel = temp_compte_resultat.calculate_distributed_cir(cursor, year, None)
                 
-                # Calculer le CIR pour ce mois en utilisant EXACTEMENT la même méthode que le compte de résultat
-                # Cette méthode calcule automatiquement l'assiette éligible et retourne le CIR
-                cir_mensuel = temp_compte_resultat.calculate_distributed_cir(cursor, year, month)
-                
-                # Accumuler le CIR total
-                if cir_mensuel > 0:
-                    cir_total += cir_mensuel
+                if cir_annuel > 0:
+                    cir_total += cir_annuel
                     
-                    # Calculer aussi l'assiette pour l'affichage (uniquement pour les mois où le CIR est positif)
-                    temps_travail_cout_mois = temp_compte_resultat.calculate_redistributed_temps_travail(
-                        cursor, self.projet_id, year, month, 'montant_charge'
-                    )
-                    amortissements_mois = temp_compte_resultat.calculate_amortissement_for_period(
-                        cursor, self.projet_id, year, month
-                    )
-                    projet_info = (date_row[0], date_row[1])
-                    total_subventions_mois = temp_compte_resultat.calculate_smart_distributed_subvention(
-                        cursor, self.projet_id, year, month, projet_info
-                    )
+                    # Récupérer les coefficients pour cette année (même logique que calculate_distributed_cir)
+                    cursor.execute('SELECT k1, k2, k3 FROM cir_coeffs WHERE annee = ?', (year,))
+                    cir_coeffs = cursor.fetchone()
+                    if not cir_coeffs:
+                        # Fallback identique à calculate_distributed_cir
+                        cursor.execute("SELECT k1, k2, k3 FROM cir_coeffs LIMIT 1")
+                        cir_coeffs = cursor.fetchone()
                     
-                    assiette_mensuelle = (temps_travail_cout_mois * k1) + (amortissements_mois * k2) - total_subventions_mois
-                    if assiette_mensuelle > 0:
-                        montant_net_eligible_total += assiette_mensuelle
-                
-                # Passer au mois suivant
-                if current_date.month == 12:
-                    current_date = datetime.datetime(current_date.year + 1, 1, 1)
-                else:
-                    current_date = datetime.datetime(current_date.year, current_date.month + 1, 1)
+                    if cir_coeffs:
+                        k1, k2, k3 = cir_coeffs
+                        
+                        # Calculer l'assiette pour cette année (pour l'affichage)
+                        # en utilisant EXACTEMENT les mêmes méthodes que calculate_distributed_cir
+                        temps_travail_annuel = 0
+                        amortissements_annuel = 0
+                        subventions_annuel = 0
+                        
+                        # Parcourir les mois de l'année qui sont dans la période du projet
+                        for month in range(1, 13):
+                            test_date = datetime.datetime(year, month, 1)
+                            if debut_projet <= test_date <= fin_projet:
+                                # Utiliser EXACTEMENT les mêmes méthodes que calculate_distributed_cir
+                                temps_travail_annuel += temp_compte_resultat.calculate_redistributed_temps_travail(
+                                    cursor, self.projet_id, year, month, 'montant_charge'
+                                )
+                                amortissements_annuel += temp_compte_resultat.calculate_amortissement_for_period(
+                                    cursor, self.projet_id, year, month
+                                )
+                                projet_info = (date_row[0], date_row[1])
+                                subventions_annuel += temp_compte_resultat.calculate_smart_distributed_subvention(
+                                    cursor, self.projet_id, year, month, projet_info
+                                )
+                        
+                        # Calculer l'assiette éligible avec les coefficients de cette année
+                        assiette_annuelle = (temps_travail_annuel * k1) + (amortissements_annuel * k2) - subventions_annuel
+                        if assiette_annuelle > 0:
+                            montant_net_eligible_total += assiette_annuelle
+            
+            # Récupérer k3 moyen pour l'affichage du taux
+            k3_display = 0.3  # Valeur par défaut
+            for year in range(debut_projet.year, fin_projet.year + 1):
+                cursor.execute('SELECT k3 FROM cir_coeffs WHERE annee = ?', (year,))
+                cir_coeffs = cursor.fetchone()
+                if cir_coeffs and cir_coeffs[0] is not None:
+                    k3_display = cir_coeffs[0]
+                    break
 
             # Ajouter un titre pour le CIR
             self.budget_vbox.addWidget(QLabel("<b>CIR :</b>"))
@@ -1059,7 +1134,7 @@ class ProjectDetailsDialog(QDialog):
             cir_table.setColumnWidth(2, 120)  # CIR attendue
 
             # Remplir les données du tableau avec les valeurs calculées mois par mois
-            taux_k3_percent = k3 * 100  # Convertir en pourcentage
+            taux_k3_percent = k3_display * 100  # Convertir en pourcentage
             
             # Vérifier si le CIR est applicable
             if montant_net_eligible_total > 0:
@@ -1184,46 +1259,172 @@ class ProjectDetailsDialog(QDialog):
 
             return total_subventions
 
+    def _calculate_costs_for_period(self, cursor, project_id, debut_projet, fin_projet):
+        """
+        Calcule les coûts du temps de travail pour une période donnée en filtrant mois par mois.
+        Utilise EXACTEMENT la même méthode que compte_resultat_display : calculate_redistributed_temps_travail
+        """
+        from compte_resultat_display import CompteResultatDisplay
+        
+        # Créer une instance minimale pour accéder aux méthodes (sans init_ui)
+        compte_resultat = CompteResultatDisplay.__new__(CompteResultatDisplay)
+        compte_resultat.project_ids = [project_id]
+        
+        # Calculer tous les mois dans la période
+        current_date = debut_projet
+        total_charge = 0
+        total_direct = 0
+        total_complet = 0
+        total_amortissements = 0
+        
+        while current_date <= fin_projet:
+            year = current_date.year
+            month = current_date.month
+            
+            # Utiliser calculate_redistributed_temps_travail pour chaque type de coût
+            # Cette méthode gère la redistribution des valeurs négatives
+            charge_mois = compte_resultat.calculate_redistributed_temps_travail(
+                cursor, project_id, year, month, 'montant_charge'
+            )
+            direct_mois = compte_resultat.calculate_redistributed_temps_travail(
+                cursor, project_id, year, month, 'cout_production'
+            )
+            complet_mois = compte_resultat.calculate_redistributed_temps_travail(
+                cursor, project_id, year, month, 'cout_complet'
+            )
+            
+            # IMPORTANT: Ajouter les amortissements pour ce mois (comme dans compte_resultat)
+            amort_mois = compte_resultat.calculate_amortissement_for_period(
+                cursor, project_id, year, month
+            )
+            
+            total_charge += charge_mois
+            total_direct += direct_mois
+            total_complet += complet_mois
+            total_amortissements += amort_mois
+            
+            # Passer au mois suivant
+            if current_date.month == 12:
+                current_date = current_date.replace(year=current_date.year + 1, month=1)
+            else:
+                current_date = current_date.replace(month=current_date.month + 1)
+        
+        # Ajouter les amortissements aux coûts (comme le fait compte_resultat pour total_charges)
+        return {
+            "charge": total_charge + total_amortissements,
+            "direct": total_direct + total_amortissements,
+            "complet": total_complet + total_amortissements,
+            "amortissements": total_amortissements
+        }
+
     def refresh_budget(self):
         """Recalcule et met à jour les coûts du budget (version optimisée)."""
+        # Vider les caches pour forcer le recalcul avec les nouvelles données
+        self._subvention_data_cache.clear()
+        self._redistribution_cache.clear()
+        
+        # Forcer le traitement des événements UI pour fluidité
+        QApplication.instance().processEvents()
+        
         with get_connection() as conn:
             cursor = conn.cursor()
             
-            # OPTIMISATION: Calcul des coûts avec JOIN au lieu de boucle de requêtes
-            cursor.execute('''
-                SELECT 
-                    SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
-                    SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
-                    SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet,
-                    COUNT(CASE WHEN cc.libelle IS NULL THEN 1 END) AS missing_count
-                FROM temps_travail t
-                LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
-                WHERE t.projet_id = ?
-            ''', (self.projet_id,))
-            couts_result = cursor.fetchone()
+            # Récupérer les dates du projet pour filtrer
+            cursor.execute('SELECT date_debut, date_fin FROM projets WHERE id = ?', (self.projet_id,))
+            dates_projet = cursor.fetchone()
+            date_debut_str = dates_projet[0] if dates_projet else None
+            date_fin_str = dates_projet[1] if dates_projet else None
             
-            couts = {
-                "charge": couts_result[0] or 0,
-                "direct": couts_result[1] or 0,
-                "complet": couts_result[2] or 0
-            }
-            missing_data = (couts_result[3] or 0) > 0
-
-            # Ajouter les dépenses (requête groupée)
-            cursor.execute('''
-                SELECT 
-                    COALESCE(SUM(d.montant), 0) AS depenses,
-                    COALESCE(SUM(ad.montant), 0) AS autres_depenses
-                FROM (SELECT ? AS projet_id) p
-                LEFT JOIN depenses d ON d.projet_id = p.projet_id
-                LEFT JOIN autres_depenses ad ON ad.projet_id = p.projet_id
-            ''', (self.projet_id,))
-            depenses_result = cursor.fetchone()
-            
-            total_depenses = (depenses_result[0] or 0) + (depenses_result[1] or 0)
-            couts["charge"] += total_depenses
-            couts["direct"] += total_depenses
-            couts["complet"] += total_depenses
+            # OPTIMISATION: Calcul des coûts avec filtrage par période comme compte_resultat_display
+            if date_debut_str and date_fin_str:
+                try:
+                    import datetime
+                    debut_projet = datetime.datetime.strptime(date_debut_str, '%m/%Y')
+                    fin_projet = datetime.datetime.strptime(date_fin_str, '%m/%Y')
+                    
+                    # Utiliser la même fonction que _load_project_data
+                    couts = self._calculate_costs_for_period(cursor, self.projet_id, debut_projet, fin_projet)
+                    missing_data = False
+                    
+                    # Ajouter dépenses filtrées par période (2 requêtes séparées)
+                    annee_debut = debut_projet.year
+                    annee_fin = fin_projet.year
+                    
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM depenses WHERE projet_id = ? AND annee >= ? AND annee <= ?',
+                                   (self.projet_id, annee_debut, annee_fin))
+                    depenses = cursor.fetchone()[0] or 0
+                    
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM autres_depenses WHERE projet_id = ? AND annee >= ? AND annee <= ?',
+                                   (self.projet_id, annee_debut, annee_fin))
+                    autres_depenses = cursor.fetchone()[0] or 0
+                    
+                    total_depenses = depenses + autres_depenses
+                    couts["charge"] += total_depenses
+                    couts["direct"] += total_depenses
+                    couts["complet"] += total_depenses
+                except Exception:
+                    # En cas d'erreur, calculer sans filtre
+                    cursor.execute('''
+                        SELECT 
+                            SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
+                            SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
+                            SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet,
+                            COUNT(CASE WHEN cc.libelle IS NULL THEN 1 END) AS missing_count
+                        FROM temps_travail t
+                        LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                        WHERE t.projet_id = ?
+                    ''', (self.projet_id,))
+                    couts_result = cursor.fetchone()
+                    couts = {
+                        "charge": couts_result[0] or 0,
+                        "direct": couts_result[1] or 0,
+                        "complet": couts_result[2] or 0
+                    }
+                    missing_data = (couts_result[3] or 0) > 0
+                    
+                    # Ajouter dépenses sans filtre (2 requêtes séparées)
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+                    depenses = cursor.fetchone()[0] or 0
+                    
+                    cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+                    autres_depenses = cursor.fetchone()[0] or 0
+                    
+                    total_depenses = depenses + autres_depenses
+                    couts["charge"] += total_depenses
+                    couts["direct"] += total_depenses
+                    couts["complet"] += total_depenses
+            else:
+                # Pas de dates - calculer sans filtre
+                cursor.execute('''
+                    SELECT 
+                        SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
+                        SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
+                        SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet,
+                        COUNT(CASE WHEN cc.libelle IS NULL THEN 1 END) AS missing_count
+                    FROM temps_travail t
+                    LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                    WHERE t.projet_id = ?
+                ''', (self.projet_id,))
+                couts_result = cursor.fetchone()
+                
+                couts = {
+                    "charge": couts_result[0] or 0,
+                    "direct": couts_result[1] or 0,
+                    "complet": couts_result[2] or 0
+                }
+                missing_data = (couts_result[3] or 0) > 0
+                
+                # Ajouter dépenses sans filtre (2 requêtes séparées)
+                cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+                depenses = cursor.fetchone()[0] or 0
+                
+                cursor.execute('SELECT COALESCE(SUM(montant), 0) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+                autres_depenses = cursor.fetchone()[0] or 0
+                
+                total_depenses = depenses + autres_depenses
+                couts["charge"] += total_depenses
+                couts["direct"] += total_depenses
+                couts["complet"] += total_depenses
 
             # Mise à jour des labels avec alignement
             cout_charge_label = self.budget_vbox.itemAt(1).widget()
@@ -1254,6 +1455,13 @@ class ProjectDetailsDialog(QDialog):
 
     def refresh_subventions(self):
         """Affiche les montants des subventions sous forme de tableau (recalcule avec la logique de répartition)"""
+        # Vider les caches pour forcer le recalcul avec les nouvelles données
+        self._subvention_data_cache.clear()
+        self._redistribution_cache.clear()
+        
+        # Forcer le traitement des événements UI pour fluidité
+        QApplication.instance().processEvents()
+        
         # Supprimer les anciens labels de subventions (s'ils existent)
         while self.budget_vbox.count() > 4:  # Garder seulement les 4 premiers items (titre + 3 coûts)
             item = self.budget_vbox.takeAt(self.budget_vbox.count() - 1)
@@ -1364,17 +1572,38 @@ class ProjectDetailsDialog(QDialog):
             subv_table.setColumnWidth(4, 100)  # Coût éligible courant
             subv_table.setColumnWidth(5, 100)  # Subvention attendue
 
+            # UTILISER EXACTEMENT LA MÊME MÉTHODE QUE LE COMPTE DE RÉSULTAT
+            # Calculer le TOTAL des subventions avec la méthode du compte de résultat
+            from compte_resultat_display import CompteResultatDisplay
+            temp_compte_resultat = CompteResultatDisplay(None, {
+                'project_ids': [self.projet_id], 
+                'years': annees_projet,
+                'period_type': 'yearly',
+                'granularity': 'yearly',
+                'cost_type': 'montant_charge'
+            })
+            
+            # Calculer le total global en utilisant EXACTEMENT la même méthode que le compte de résultat
             total_subventions = 0
-
-            # Importer la nouvelle méthode de calcul depuis SubventionDialog
-            from subvention_dialog import SubventionDialog
-
+            projet_info = (date_row[0], date_row[1])
+            
+            for annee in annees_projet:
+                for mois in range(1, 13):
+                    mois_date = datetime.datetime(annee, mois, 1)
+                    if debut_projet <= mois_date <= fin_projet:
+                        # Appeler EXACTEMENT la même fonction que le compte de résultat
+                        subv_mensuelle = temp_compte_resultat.calculate_smart_distributed_subvention(
+                            cursor, self.projet_id, annee, mois, projet_info
+                        )
+                        total_subventions += subv_mensuelle
+            
+            # Maintenant calculer chaque subvention individuellement pour l'affichage
             for row, subv in enumerate(subventions):
                 (nom, mode_simplifie, montant_forfaitaire, dep_temps, coef_temps, dep_ext, coef_ext, 
                  dep_autres, coef_autres, dep_amort, coef_amort, cd, taux, 
                  date_debut_subv, date_fin_subv, montant_max, depenses_max) = subv
                 
-                # Construire le dictionnaire de données de subvention pour le calcul
+                # Construire le dictionnaire de données de subvention
                 subvention_data = {
                     'nom': nom,
                     'mode_simplifie': mode_simplifie or 0,
@@ -1390,54 +1619,52 @@ class ProjectDetailsDialog(QDialog):
                     'cd': cd or 1,
                     'taux': taux or 100,
                     'date_debut_subvention': date_debut_subv,
-                    'date_fin_subvention': date_fin_subv
+                    'date_fin_subvention': date_fin_subv,
+                    'montant_subvention_max': montant_max,
+                    'depenses_eligibles_max': depenses_max
                 }
                 
-                # Calculer le montant total estimé SEULEMENT sur la période de subvention
+                # Calculer le montant de cette subvention avec la même méthode
                 montant_total_estime = 0
                 assiette_totale_courante = 0
                 
-                # Calculer les années de la période de subvention (pas du projet)
+                # Calculer les années de la période de subvention
                 if date_debut_subv and date_fin_subv:
                     try:
                         debut_subv = datetime.datetime.strptime(date_debut_subv, '%m/%Y')
                         fin_subv = datetime.datetime.strptime(date_fin_subv, '%m/%Y')
                         annees_subvention = list(range(debut_subv.year, fin_subv.year + 1))
                     except ValueError:
-                        annees_subvention = annees_projet  # Fallback sur années projet
+                        annees_subvention = annees_projet
                 else:
-                    annees_subvention = annees_projet  # Fallback sur années projet
+                    annees_subvention = annees_projet
                 
                 for annee in annees_subvention:
-                    # Calculer l'assiette éligible pour cette année avec la nouvelle logique de redistribution
-                    assiette_annee = self.calculate_period_eligible_expenses_with_redistribution(
-                        cursor, self.projet_id, subvention_data, annee, None
-                    )
-                    assiette_totale_courante += assiette_annee
-                
-                # Appliquer le plafond du coût éligible max à l'assiette totale
-                assiette_plafonnee = assiette_totale_courante
-                if not mode_simplifie and depenses_max and depenses_max > 0:
-                    assiette_plafonnee = min(assiette_totale_courante, depenses_max)
-                
-                # Calculer la subvention attendue
-                if mode_simplifie:
-                    # Mode forfaitaire
-                    montant_total_estime = montant_forfaitaire or 0
-                else:
-                    # Mode détaillé - appliquer le taux sur l'assiette éligible plafonnée
-                    montant_avant_plafond = assiette_plafonnee * (taux / 100.0)
-                    
-                    # Appliquer le plafond du montant max si défini
-                    if montant_max and montant_max > 0:
-                        montant_total_estime = min(montant_avant_plafond, montant_max)
-                    else:
-                        montant_total_estime = montant_avant_plafond
+                    for mois in range(1, 13):
+                        mois_date = datetime.datetime(annee, mois, 1)
+                        if debut_projet <= mois_date <= fin_projet:
+                            # Utiliser la même méthode que calculate_smart_distributed_subvention
+                            if date_debut_subv and date_fin_subv:
+                                montant_mensuel = temp_compte_resultat.calculate_subvention_with_redistribution(
+                                    cursor, self.projet_id, subvention_data, annee, mois, date_debut_subv, date_fin_subv
+                                )
+                            else:
+                                montant_mensuel = temp_compte_resultat.calculate_monthly_subvention_fallback(
+                                    cursor, self.projet_id, subvention_data, annee, mois, projet_info
+                                )
+                            
+                            montant_total_estime += montant_mensuel
+                            
+                            # Calculer l'assiette pour affichage
+                            assiette_mensuelle = temp_compte_resultat.calculate_period_eligible_expenses_with_redistribution(
+                                cursor, self.projet_id, subvention_data, annee, mois
+                            )
+                            assiette_totale_courante += assiette_mensuelle
                 
                 # Nom de la subvention
                 subv_table.setItem(row, 0, QTableWidgetItem(nom or ""))
                 
-                # Coût éligible max - afficher "---" pour les subventions forfaitaires
+                # Coût éligible max
                 if mode_simplifie:
                     subv_table.setItem(row, 1, QTableWidgetItem("---"))
                 else:
@@ -1446,22 +1673,17 @@ class ProjectDetailsDialog(QDialog):
                 # Aide max
                 subv_table.setItem(row, 2, QTableWidgetItem(format_montant(montant_max) if montant_max and montant_max > 0 else "Illimité"))
 
-                # Taux (avec virgule française)
+                # Taux
                 subv_table.setItem(row, 3, QTableWidgetItem(f"{taux:.1f}%".replace('.', ',') if taux else "0,0%"))
                 
-                # Coût éligible courant (recalculé avec la nouvelle logique)
+                # Coût éligible courant
                 if mode_simplifie:
-                    # Pour le mode forfaitaire, afficher "---" 
                     subv_table.setItem(row, 4, QTableWidgetItem("---"))
                 else:
-                    # Pour le mode détaillé, afficher l'assiette éligible plafonnée
-                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_plafonnee)))
+                    subv_table.setItem(row, 4, QTableWidgetItem(format_montant(assiette_totale_courante)))
                 
-                # Subvention attendue (recalculée avec la nouvelle logique)
+                # Subvention attendue
                 subv_table.setItem(row, 5, QTableWidgetItem(format_montant(montant_total_estime)))
-                
-                # Ajouter au total
-                total_subventions += montant_total_estime
 
             # Ajouter le tableau au layout
             self.budget_vbox.addWidget(subv_table)
@@ -1886,35 +2108,54 @@ class ProjectDetailsDialog(QDialog):
             cursor.execute('SELECT nom, data FROM images WHERE projet_id=?', (self.projet_id,))
             images = cursor.fetchall()
             
-            # Calcul des coûts (réutiliser la logique existante)
-            cursor.execute('''
-                SELECT t.categorie, SUM(t.jours) AS total_jours
-                FROM temps_travail t
-                WHERE t.projet_id = ?
-                GROUP BY t.categorie
-            ''', (self.projet_id,))
-            categories_jours = cursor.fetchall()
+            # Calcul des coûts avec filtre sur les dates du projet
+            import datetime as dt_module
+            annee_debut = None
+            annee_fin = None
+            if date_debut and date_fin:
+                try:
+                    debut_parsed = dt_module.datetime.strptime(date_debut, '%m/%Y')
+                    fin_parsed = dt_module.datetime.strptime(date_fin, '%m/%Y')
+                    annee_debut = debut_parsed.year
+                    annee_fin = fin_parsed.year
+                except:
+                    pass
             
-            couts = {"charge": 0, "direct": 0, "complet": 0}
-            for categorie, total_jours in categories_jours:
-                code_categorie = _category_code(categorie)
-                if not code_categorie:
-                    continue
+            # Calcul optimisé avec JOIN et filtre sur années
+            if annee_debut and annee_fin:
                 cursor.execute('''
-                    SELECT montant_charge, cout_production, cout_complet
-                    FROM categorie_cout
-                    WHERE categorie = ?
-                ''', (code_categorie,))
-                res = cursor.fetchone()
-                
-                if res:
-                    montant_charge, cout_production, cout_complet = res
-                    couts["charge"] += float(total_jours * montant_charge) if montant_charge else 0
-                    couts["direct"] += float(total_jours * cout_production) if cout_production else 0
-                    couts["complet"] += float(total_jours * cout_complet) if cout_complet else 0
+                    SELECT 
+                        SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
+                        SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
+                        SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet
+                    FROM temps_travail t
+                    LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                    WHERE t.projet_id = ? AND t.annee >= ? AND t.annee <= ?
+                ''', (self.projet_id, annee_debut, annee_fin))
+            else:
+                cursor.execute('''
+                    SELECT 
+                        SUM(COALESCE(cc.montant_charge * t.jours, 0)) AS total_charge,
+                        SUM(COALESCE(cc.cout_production * t.jours, 0)) AS total_direct,
+                        SUM(COALESCE(cc.cout_complet * t.jours, 0)) AS total_complet
+                    FROM temps_travail t
+                    LEFT JOIN categorie_cout cc ON t.categorie = cc.libelle AND t.annee = cc.annee
+                    WHERE t.projet_id = ?
+                ''', (self.projet_id,))
+            
+            couts_result = cursor.fetchone()
+            couts = {
+                "charge": couts_result[0] or 0,
+                "direct": couts_result[1] or 0,
+                "complet": couts_result[2] or 0
+            }
 
-            # Ajouter les dépenses externes et autres
-            cursor.execute('SELECT SUM(montant) FROM depenses WHERE projet_id = ?', (self.projet_id,))
+            # Ajouter les dépenses externes et autres avec filtre
+            if annee_debut and annee_fin:
+                cursor.execute('SELECT SUM(montant) FROM depenses WHERE projet_id = ? AND annee >= ? AND annee <= ?', 
+                              (self.projet_id, annee_debut, annee_fin))
+            else:
+                cursor.execute('SELECT SUM(montant) FROM depenses WHERE projet_id = ?', (self.projet_id,))
             depenses_externes = cursor.fetchone()
             if depenses_externes and depenses_externes[0]:
                 montant_depenses = float(depenses_externes[0])
@@ -1922,7 +2163,11 @@ class ProjectDetailsDialog(QDialog):
                 couts["direct"] += montant_depenses
                 couts["complet"] += montant_depenses
 
-            cursor.execute('SELECT SUM(montant) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
+            if annee_debut and annee_fin:
+                cursor.execute('SELECT SUM(montant) FROM autres_depenses WHERE projet_id = ? AND annee >= ? AND annee <= ?', 
+                              (self.projet_id, annee_debut, annee_fin))
+            else:
+                cursor.execute('SELECT SUM(montant) FROM autres_depenses WHERE projet_id = ?', (self.projet_id,))
             autres_depenses = cursor.fetchone()
             if autres_depenses and autres_depenses[0]:
                 montant_autres = float(autres_depenses[0])

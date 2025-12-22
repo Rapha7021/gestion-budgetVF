@@ -2677,9 +2677,9 @@ class CompteResultatDisplay(QDialog):
                         debut_annee = datetime.datetime(year, 1, 1)
                         fin_annee = datetime.datetime(year, 12, 31)
                         
-                        # Intersection entre [début_amort, fin_effective] et [début_annee, fin_annee]
-                        debut_periode = max(debut_amort, debut_annee)
-                        fin_periode = min(fin_effective, fin_annee)
+                        # CORRECTION: Intersection entre [début_amort, fin_effective], [début_annee, fin_annee] ET [début_projet, fin_projet]
+                        debut_periode = max(debut_amort, debut_annee, debut_projet)
+                        fin_periode = min(fin_effective, fin_annee, fin_projet)
                         
                         if debut_periode <= fin_periode:
                             # Calculer le nombre de mois dans cette intersection

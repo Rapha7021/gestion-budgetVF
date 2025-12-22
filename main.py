@@ -12,7 +12,7 @@ import re
 import os
 import pandas as pd  # Ajout pour lecture Excel
 
-from database import get_connection, init_db, recalculate_all_subventions
+from database import get_connection, init_db
 from category_utils import list_category_labels, resolve_category_code
 
 def get_equipe_categories():
@@ -155,9 +155,6 @@ class MainWindow(QWidget):
         self.btn_directions = QPushButton('Gérer les directions')
         self.btn_project_managers = QPushButton('Gérer les chefs de projet')
         self.btn_import_export = QPushButton('Importer / Exporter BDD')
-        self.btn_recalculate = QPushButton('🔄 Recalculer tout')
-        self.btn_recalculate.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
-        self.btn_recalculate.setToolTip("Recalcule toutes les valeurs dérivées (subventions, CIR, etc.)\nUtile après une mise à jour de l'application")
         self.btn_couts_categorie.setToolTip(
             "Source :\nMagic S\nRevue de projet\nHypothèse LLH"
         )
@@ -170,7 +167,6 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_directions)
         btn_layout.addWidget(self.btn_project_managers)
         btn_layout.addWidget(self.btn_import_export)
-        btn_layout.addWidget(self.btn_recalculate)
         layout.addLayout(btn_layout)
         self.setLayout(layout)
         self.btn_new.clicked.connect(self.open_project_form)
@@ -181,7 +177,6 @@ class MainWindow(QWidget):
         self.btn_couts_categorie.clicked.connect(self.open_categorie_cout_dialog)
         self.btn_cir.clicked.connect(self.open_cir_dialog)
         self.btn_print_budget.clicked.connect(self.handle_print_budget)
-        self.btn_recalculate.clicked.connect(self.recalculate_all_data)
         self.btn_bilan_jours.clicked.connect(self.handle_bilan_jours)
         self.btn_directions.clicked.connect(self.open_direction_manager)
         self.btn_project_managers.clicked.connect(self.open_project_manager_dialog)
@@ -333,34 +328,6 @@ class MainWindow(QWidget):
         from import_export_dialog import ImportExportDialog
         dialog = ImportExportDialog(self)
         dialog.exec()
-    
-    def recalculate_all_data(self):
-        """Recalcule toutes les valeurs dérivées de la base de données"""
-        confirm = QMessageBox.question(
-            self, 
-            'Confirmation', 
-            'Cette opération va recalculer toutes les valeurs dérivées (subventions, etc.) pour tous les projets.\n\n'
-            'Cela peut prendre quelques secondes.\n\n'
-            'Continuer ?',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if confirm == QMessageBox.StandardButton.Yes:
-            try:
-                count = recalculate_all_subventions()
-                QMessageBox.information(
-                    self, 
-                    'Recalcul terminé', 
-                    f'{count} subvention(s) ont été recalculées avec succès.\n\n'
-                    'Les valeurs affichées sont maintenant à jour.'
-                )
-                self.load_projects()  # Rafraîchir l'affichage
-            except Exception as e:
-                QMessageBox.critical(
-                    self, 
-                    'Erreur', 
-                    f'Une erreur est survenue lors du recalcul :\n{str(e)}'
-                )
 
 class ProjectForm(QDialog):
     def __init__(self, parent=None, projet_id=None):
