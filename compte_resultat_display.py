@@ -1107,7 +1107,7 @@ class CompteResultatDisplay(QDialog):
                                     value_str = value_str.replace(" jours", "").replace(" €/jour", "")
                                     cell.value = float(value_str)
                                     # Format français : espace pour milliers, virgule pour décimales
-                                    cell.number_format = '# ##0,00'
+                                    cell.number_format = '#\\ ##0.00'
                                 else:
                                     cell.value = ""
                             except ValueError:
