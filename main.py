@@ -272,6 +272,9 @@ class MainWindow(QWidget):
         
         # Réactiver le tri après avoir mis à jour toutes les données
         self.project_table.setSortingEnabled(True)
+        
+        # Ajuster automatiquement la largeur des colonnes au contenu
+        self.project_table.resizeColumnsToContents()
 
     def open_project_form(self):
         form = ProjectForm(self)
