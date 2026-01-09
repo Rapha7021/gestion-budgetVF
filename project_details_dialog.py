@@ -2088,6 +2088,10 @@ class ProjectDetailsDialog(QDialog):
             ''', (self.projet_id,))
             projet = cursor.fetchone()
             
+            # Extraire les dates du projet
+            date_debut = projet[3] if projet else None
+            date_fin = projet[4] if projet else None
+            
             # Thèmes
             cursor.execute('SELECT t.nom FROM themes t JOIN projet_themes pt ON t.id=pt.theme_id WHERE pt.projet_id=?', (self.projet_id,))
             themes = [nom for (nom,) in cursor.fetchall()]
